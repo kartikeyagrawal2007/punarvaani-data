@@ -1,5 +1,7 @@
 # punarvaani-data
 
+> 📘 **New here? Read [`docs/DATA_ENGINE_GUIDE.md`](docs/DATA_ENGINE_GUIDE.md)**: aim, pipeline diagrams, what's done and what isn't, your step-by-step tasks, improvements and interview Q&A.
+
 **The Hindi lip-reading dataset builder for [Punarvaani](https://github.com/kartikeyagrawal2007/punarvaani).**
 It turns YouTube videos of one person talking to the camera into short, clean, word-aligned clips with Devanagari transcripts, in exactly the format the Stage-1 trainer expects (`TEAM_GUIDE.md`, Part 1).
 
