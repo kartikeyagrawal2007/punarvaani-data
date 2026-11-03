@@ -1,0 +1,7 @@
+# One row per video. Choose videos with ONE person talking to the camera (news anchors, lectures, vlogs, interviews in close-up).
+# speaker = a short name for that person; the same person in several videos gets the same name.
+# start/end (optional) keep only that section, in seconds or mm:ss. Check each channel's terms before use.
+url,speaker,start,end,notes
+https://www.youtube.com/watch?v=VIDEO_ID_1,anchor_a,0:30,12:00,DD News bulletin - anchor only
+https://www.youtube.com/watch?v=VIDEO_ID_2,anchor_a,,,same anchor, another day
+https://www.youtube.com/watch?v=VIDEO_ID_3,lecturer_b,1:00,40:00,NPTEL Hindi lecture

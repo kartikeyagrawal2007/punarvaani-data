@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "punarvaani-data"
+version = "0.1.0"
+description = "Hindi lip-reading dataset builder for Punarvaani: YouTube video -> clean, frontal, in-sync 1.5-2.5 s clips with Devanagari transcripts"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "mediapipe>=0.10.14",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Downloading from YouTube (also needs the ffmpeg binary on PATH)
+download = ["yt-dlp>=2024.8.6"]
+# Speech recognition with word timestamps (pick one backend; faster-whisper is the default)
+asr = ["faster-whisper>=1.0"]
+whisperx = ["whisperx>=3.1"]
+# IndicWhisper / any Hugging Face Whisper checkpoint
+hf = ["transformers>=4.40", "torch>=2.1", "soundfile>=0.12"]
+dev = ["pytest>=7.4", "ruff==0.17.1"]
+
+[project.scripts]
+pvdata = "pvdata.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pvdata*"]
+
+[tool.setuptools.package-data]
+"pvdata" = ["assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["pvdata/g2p/hindi_g2p.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pvdata"]

@@ -1,0 +1,42 @@
+# Default thresholds for the Punarvaani data engine. Copy this file and pass --config to change them.
+# Clip rules follow TEAM_GUIDE.md (main repo): 1.5-2.5 s, Devanagari only, Stage-1 CTC limit U+R <= 32.
+clip:
+  min_s: 1.5
+  max_s: 2.5
+  min_words: 2
+  max_words: 6
+  pad_s: 0.08
+  max_gap_s: 0.35
+  ctc_steps: 32
+  fps: 25
+text:
+  spell_out_numbers: true
+  reject_latin: true
+  min_asr_word_prob: 0.45
+face:
+  sample_every: 2
+  min_detect_ratio: 0.95
+  max_faces: 1
+  max_yaw_deg: 20.0
+  max_pitch_deg: 20.0
+  min_face_height_frac: 0.18
+  min_mouth_px: 40
+sync:
+  enabled: true
+  max_lag_frames: 5
+  min_corr: 0.15
+  max_abs_offset_frames: 3
+video:
+  min_height: 720
+  out_height: 720
+  out_fps: 25
+  keep_audio: true
+asr:
+  backend: faster-whisper
+  model: large-v3
+  language: hi
+  device: auto
+  compute_type: auto
+val_frac: 0.1
+test_frac: 0.1
+seed: 0

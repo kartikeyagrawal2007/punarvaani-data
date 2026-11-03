@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Data never goes into git (faces and voices are personal data)
+/work/
+/raw_videos/
+/hindi_dataset/
+/downloads/
+/data/
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.wav
+*.m4a
+*.mp3
+*.opus
+*.npy
+*.npz
+*.task
+
+# Secrets / OS
+.env
+cookies.txt
+.DS_Store
