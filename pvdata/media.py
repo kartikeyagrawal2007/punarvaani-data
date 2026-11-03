@@ -27,12 +27,21 @@ def download(url: str, out_dir: str | Path, min_height: int = 720, cookies: str 
     fmt = (
         f"bv*[height>={min_height}][ext=mp4]+ba[ext=m4a]/bv*[height>={min_height}]+ba/b[height>={min_height}]/bv*+ba/b"
     )
-    cmd = [_require("yt-dlp"), "-f", fmt, "--merge-output-format", "mp4", "--no-playlist", "-o", template,
+    cmd = [_require("yt-dlp"), "-f", fmt, "--merge-output-format", "mp4", "--no-playlist", "--write-info-json", "-o", template,
            "--print", "after_move:filepath", url]  # fmt: skip
     if cookies:
         cmd[1:1] = ["--cookies", cookies]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.strip().splitlines()
     return Path(out[-1])
+
+
+def read_info(video_path: str | Path) -> dict:
+    """Licence and provenance from the yt-dlp .info.json written next to a download (empty if absent)."""
+    p = Path(video_path).with_suffix(".info.json")
+    if not p.exists():
+        return {}
+    info = json.loads(p.read_text(encoding="utf-8"))
+    return {k: info.get(k) or "" for k in ("id", "license", "channel", "title", "upload_date")}
 
 
 def probe(path: str | Path) -> dict:

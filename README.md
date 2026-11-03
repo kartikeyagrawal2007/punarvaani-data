@@ -46,7 +46,7 @@ git clone <this repo> && cd punarvaani-data
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[download,asr,dev]"     # yt-dlp + faster-whisper
 # ffmpeg must be installed:  macOS: brew install ffmpeg   Ubuntu/Colab: apt-get install -y ffmpeg
-pytest -q                                 # 26 tests, ~30 s, no internet needed
+pytest -q                                 # 27 tests, ~30 s, no internet needed
 ```
 
 ASR is the slow part: use a GPU (Colab/Kaggle) for real runs. Cutting clips and face checks run fine on a laptop.
@@ -102,6 +102,32 @@ python scripts/preprocess_lips.py --input_dir /path/to/dataset/raw_videos --outp
 - Many speakers beat many hours of one speaker: aim for **10+ speakers**. Prototype: 300–500 clips; benchmark: 1,500+ (TEAM_GUIDE).
 - Use `start`/`end` to cut out intros, ads and B-roll before processing.
 - Check each channel's terms of use and note it in `notes`. **Never upload the clips publicly**: faces and voices are personal data. Share them only privately within the team.
+
+## Building it for the dataset paper
+
+We plan to publish the dataset itself (like LRS3, which was built from TED talks). That changes three things:
+
+**1. Prefer openly licensed, many-speaker sources.** `pvdata find` supports `@name` rows (see `sources/speakers.csv`): every video becomes its own speaker, which is ideal for TEDx, NPTEL and Josh Talks.
+
+| Source | Why | Licence (verify per video/course) |
+|---|---|---|
+| **NPTEL** Hindi lectures | Hundreds of teachers, clear Hindi, long takes | Creative Commons (NPTEL states CC BY-SA); check each course page |
+| **TED / TEDx** Hindi talks | Many speakers, diverse ages, accents, genders | TED usage policy: CC BY-NC-ND 4.0 (non-commercial research) |
+| Josh Talks (Hindi) | Many speakers, one person on stage | Standard YouTube licence: release IDs and timestamps only |
+| News/journalist channels | Long, clean talking-head takes | Standard YouTube licence: release IDs and timestamps only |
+
+NPTEL often shows slides with a small inset of the teacher, and TEDx cuts to wide stage shots and the audience. The face checks drop those parts automatically, so expect a lower acceptance rate.
+
+**2. Provenance is recorded for every clip.** `manifest.csv` stores `license`, `channel`, `title` and `upload_date` (from yt-dlp metadata), and `report.json` counts accepted clips per licence. That's the raw material for the datasheet.
+
+**3. Release format.** Publish **video IDs + start/end times + transcripts + this code**, not the video files, as LRS3, AVSpeech and VoxCeleb did. Users rebuild the clips themselves. Never publish volunteer or patient recordings without written consent covering release.
+
+For the paper, also report:
+- the filter funnel (`rejected_by_reason`);
+- hours and clips per speaker;
+- speaker counts per split;
+- a hand-checked sample of about 300 transcripts (transcript accuracy);
+- baseline Stage-1 results on the fixed speaker-disjoint test split.
 
 ## Why clips get rejected (`report.json`)
 

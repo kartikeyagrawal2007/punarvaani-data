@@ -14,3 +14,10 @@ dhruv_rathee,Dhruv Rathee Hindi video
 sakshi_joshi,Sakshi Joshi Hindi news
 arfa_khanum,Arfa Khanum Sherwani Hindi
 nidhi_kulpati,Nidhi Kulpati Hindi
+# Many different speakers (one per video): best for speaker variety and for the dataset paper.
+# NPTEL is released under Creative Commons (check each course page); TED/TEDx talks are CC BY-NC-ND (research use).
+@nptel,NPTEL Hindi lecture
+@nptel,NPTEL हिंदी व्याख्यान
+@tedx,TEDx Talks Hindi
+@tedx,TEDx हिंदी talk
+@joshtalks,Josh Talks Hindi

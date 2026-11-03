@@ -56,13 +56,22 @@ class Pipeline:
     def fetch(self, src: Source) -> Path:
         if src.is_local:
             return Path(src.url)
-        cached = sorted((self.work / "downloads").glob(f"{src.source_id}.*"))
-        if cached:
-            return cached[0]
+        final = self.work / "downloads" / f"{src.source_id}.mp4"
+        if final.exists():
+            return final
         path = media.download(src.url, self.work / "downloads" / "tmp", self.cfg.video.min_height, self.cookies)
-        final = self.work / "downloads" / f"{src.source_id}{path.suffix}"
+        meta = media.read_info(path)
+        (self.work / "meta").mkdir(exist_ok=True)
+        write_json(self.work / "meta" / f"{src.source_id}.json", meta)
+        path.with_suffix(".info.json").unlink(missing_ok=True)
         path.rename(final)
         return final
+
+    def provenance(self, src: Source) -> dict:
+        """Licence/channel/title/upload date for the manifest (needed for the dataset paper's datasheet)."""
+        p = self.work / "meta" / f"{src.source_id}.json"
+        meta = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        return {k: meta.get(k, "") for k in ("license", "channel", "title", "upload_date")}
 
     def transcribe(self, src: Source, video: Path, start: float, end: float | None) -> tuple[Path, list[Word]]:
         wav = self.work / "audio" / f"{src.source_id}.wav"
@@ -121,7 +130,8 @@ class Pipeline:
         video = self.fetch(src)
         info = media.probe(video)
         counts = {"accepted": 0, "rejected": 0}
-        base_row = {"speaker": spk, "speaker_name": src.speaker, "source_url": src.url, "source_id": src.source_id}
+        base_row = {"speaker": spk, "speaker_name": src.speaker, "source_url": src.url, "source_id": src.source_id,
+                    **self.provenance(src)}  # fmt: skip
         if info["height"] < self.cfg.video.min_height:
             self.manifest.add(
                 {**base_row, "status": "rejected", "reason": f"source_below_{self.cfg.video.min_height}p"}

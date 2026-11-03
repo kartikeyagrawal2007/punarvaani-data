@@ -18,7 +18,7 @@ from pathlib import Path
 
 CLIP_NAME = re.compile(r"^(spk\d{2,})_(\d{3,})$")
 MANIFEST_FIELDS = [
-    "clip_id", "speaker", "speaker_name", "source_url", "source_id", "start", "end", "duration", "text",
+    "clip_id", "speaker", "speaker_name", "source_url", "source_id", "license", "channel", "title", "upload_date", "start", "end", "duration", "text",
     "raw_asr_text", "ctc_need", "asr_min_prob", "face_ratio", "yaw", "pitch", "sync_corr", "sync_offset",
     "status", "reason",
 ]  # fmt: skip
@@ -71,6 +71,7 @@ def build_report(rows: list[dict]) -> dict:
         "accepted_hours": round(hours, 3),
         "speakers": len(per_speaker),
         "clips_per_speaker": dict(sorted(per_speaker.items())),
+        "accepted_by_license": dict(Counter(r.get("license") or "unknown" for r in accepted).most_common()),
         "rejected_by_reason": dict(Counter(r["reason"] for r in rows if r["status"] != "accepted").most_common()),
     }
 

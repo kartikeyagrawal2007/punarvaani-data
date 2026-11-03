@@ -1,8 +1,11 @@
-"""Build a sources CSV from YouTube searches, one search per speaker (runs yt-dlp; needs internet).
+"""Build a sources CSV from YouTube searches, one search per row (runs yt-dlp; needs internet).
 
-Input CSV columns: ``speaker,query`` — e.g. ``ravish,Ravish Kumar Official``. For each row we take the
+Input CSV columns: ``speaker,query``, e.g. ``ravish,Ravish Kumar Official``. For each row we take the
 top N search results whose length is within [min_minutes, max_minutes] and write them as sources rows,
 with the video title and channel in ``notes`` so you can check them before mining.
+
+A speaker starting with ``@`` (e.g. ``@tedx``) means "a different person in every video" (TEDx, NPTEL,
+Josh Talks): each video gets its own speaker id, like ``tedx_<video id>``.
 
 Always review the output: search can return clips of other people, panels or compilations.
 Delete those rows before ``pvdata run``.
@@ -69,8 +72,9 @@ def find_sources(queries_csv: str | Path, out_csv: str | Path, per_speaker: int 
                 if h.video_id in seen:
                     continue
                 seen.add(h.video_id)
-                w.writerow(
-                    [h.url, r["speaker"].strip(), "", "", f"{h.channel} | {h.title} | {h.duration / 60:.0f} min"]
-                )
+                speaker = r["speaker"].strip()
+                if speaker.startswith("@"):
+                    speaker = f"{speaker[1:]}_{h.video_id}"
+                w.writerow([h.url, speaker, "", "", f"{h.channel} | {h.title} | {h.duration / 60:.0f} min"])
                 n += 1
     return n
