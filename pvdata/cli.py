@@ -40,6 +40,14 @@ def _cmd_run(args) -> int:
     return 0
 
 
+def _cmd_find(args) -> int:
+    from pvdata.find import find_sources
+
+    n = find_sources(args.queries, args.out, args.per_speaker, args.min_minutes, args.max_minutes)
+    print(f"wrote {n} videos to {args.out}. Review every row before `pvdata run`.")
+    return 0
+
+
 def _cmd_validate(args) -> int:
     from pvdata.validate import validate
 
@@ -95,6 +103,14 @@ def main(argv=None) -> int:
     r.add_argument("--no-sync", action="store_true", help="skip the audio-mouth sync check")
     r.add_argument("--limit", type=int, help="only the first N sources (for a quick test)")
     r.set_defaults(fn=_cmd_run)
+
+    f = sub.add_parser("find", help="build a sources CSV from YouTube searches (speaker,query per row)")
+    f.add_argument("--queries", required=True, help="CSV with columns speaker,query")
+    f.add_argument("--out", required=True, help="sources CSV to write")
+    f.add_argument("--per-speaker", type=int, default=3)
+    f.add_argument("--min-minutes", type=float, default=4)
+    f.add_argument("--max-minutes", type=float, default=40)
+    f.set_defaults(fn=_cmd_find)
 
     v = sub.add_parser("validate", help="check a raw_videos/ folder against the TEAM_GUIDE rules")
     v.add_argument("raw_videos")

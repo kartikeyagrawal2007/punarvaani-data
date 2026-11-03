@@ -1,0 +1,16 @@
+# One row per person. `pvdata find` searches YouTube for each query and writes candidate videos.
+# Picked for: one person, facing the camera, mostly Hindi, long uploads. Add more women and regional accents if you can.
+# Review the generated CSV and delete videos with other people, panels, B-roll or heavy English.
+speaker,query
+ravish,Ravish Kumar Official Hindi
+abhisar,Abhisar Sharma Hindi news analysis
+ajit_anjum,Ajit Anjum Hindi analysis
+punya_prasun,Punya Prasun Bajpai Hindi
+saurabh_dwivedi,Saurabh Dwivedi Lallantop baithki
+vikas_divyakirti,Dr Vikas Divyakirti Hindi lecture
+khan_sir,Khan Sir Patna Hindi class
+akash_banerjee,Deshbhakt Akash Banerjee Hindi
+dhruv_rathee,Dhruv Rathee Hindi video
+sakshi_joshi,Sakshi Joshi Hindi news
+arfa_khanum,Arfa Khanum Sherwani Hindi
+nidhi_kulpati,Nidhi Kulpati Hindi

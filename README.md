@@ -46,7 +46,7 @@ git clone <this repo> && cd punarvaani-data
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[download,asr,dev]"     # yt-dlp + faster-whisper
 # ffmpeg must be installed:  macOS: brew install ffmpeg   Ubuntu/Colab: apt-get install -y ffmpeg
-pytest -q                                 # 25 tests, ~30 s, no internet needed
+pytest -q                                 # 26 tests, ~30 s, no internet needed
 ```
 
 ASR is the slow part: use a GPU (Colab/Kaggle) for real runs. Cutting clips and face checks run fine on a laptop.
@@ -62,6 +62,12 @@ https://www.youtube.com/watch?v=YYYY,lecturer_b,,,NPTEL Hindi lecture
 ```
 - One row per video. `speaker` is your short name for the person on screen. Use the **same name** for the same person across videos; they become `spk01`, `spk02`, ... in order.
 - `start`/`end` (optional, seconds or mm:ss) keep only the part where that person faces the camera.
+
+Or let it search YouTube for you: put one person per row in `sources/speakers.csv` (`speaker,query`), then
+```bash
+pvdata find --queries sources/speakers.csv --out sources/my_sources.csv --per-speaker 3
+```
+and **review every row**: delete panels, compilations, other people and mostly-English videos.
 
 **2. Mine clips:**
 ```bash
