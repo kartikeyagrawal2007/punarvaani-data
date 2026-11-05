@@ -115,7 +115,12 @@ def materialise_splits(out: Path, splits: dict[str, list[str]], link: bool = Tru
 
                     shutil.rmtree(dst)
             if link:
-                dst.symlink_to(src, target_is_directory=True)
+                try:
+                    dst.symlink_to(src, target_is_directory=True)
+                except OSError:  # Windows without Developer Mode can't create symlinks: copy instead
+                    import shutil
+
+                    shutil.copytree(src, dst)
             else:
                 import shutil
 
