@@ -115,3 +115,26 @@ def test_speaker_disjoint_split():
     s = speaker_splits([f"spk{i:02d}" for i in range(1, 11)], 0.1, 0.1, seed=0)
     all_ = s["train"] + s["val"] + s["test"]
     assert len(all_) == len(set(all_)) == 10 and s["val"] and s["test"]
+
+
+def test_interrupted_source_is_redone_without_duplicates(tmp_path):
+    texts = ["नमस्ते भारत आज मौसम", "पानी दो मुझे अभी"]
+    first, pipe = run(tmp_path, texts)
+    for p in (tmp_path / "work" / "done").glob("*.json"):
+        p.unlink()  # as if the run had been stopped before this source finished
+    second, pipe = run(tmp_path, texts)
+    clips = list((tmp_path / "out" / "raw_videos" / "spk01").glob("*.mp4"))
+    assert second["accepted"] == first["accepted"] == len(clips)
+    assert len(pipe.manifest.rows()) == first["candidates"]
+
+
+def test_parallel_judging_matches_serial(tmp_path):
+    texts = ["नमस्ते भारत आज मौसम", "School bus में बच्चे", "हम ५ लोग साथ हैं", "पानी दो मुझे अभी"]
+    video = make_video(tmp_path / "talk.mp4")
+    rows = {}
+    for workers in (1, 4):
+        out = tmp_path / f"out{workers}"
+        pipe = Pipeline(Config(), out, out / "work", FakeASR(texts), BrightnessFace, workers=workers)
+        pipe.run([Source(str(video), "ravi")])
+        rows[workers] = [(r["start"], r["status"], r["reason"], r["clip_id"]) for r in pipe.manifest.rows()]
+    assert rows[1] == rows[4]

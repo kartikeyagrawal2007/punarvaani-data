@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,7 +29,7 @@ from pvdata.asr import Transcriber, Word
 from pvdata.config import Config
 from pvdata.ctc import fits_ctc
 from pvdata.export import Manifest, build_report, clip_paths, next_index, write_json, write_transcript
-from pvdata.face import FaceObs, check_clip
+from pvdata.face import FaceObs, check_clip, scan_frames
 from pvdata.segment import Candidate, segment_words
 from pvdata.sources import Source, speaker_ids
 from pvdata.sync import loudness_envelope, sync_score
@@ -45,9 +48,11 @@ class Decision:
 
 class Pipeline:
     def __init__(self, cfg: Config, out: str | Path, work: str | Path, transcriber: Transcriber,
-                 face_factory: Callable[[], Callable[[np.ndarray], FaceObs]], cookies: str | None = None):  # fmt: skip
+                 face_factory: Callable[[], Callable[[np.ndarray], FaceObs]], cookies: str | None = None,
+                 workers: int = 1):  # fmt: skip
         self.cfg, self.out, self.work = cfg, Path(out), Path(work)
         self.transcriber, self.face_factory, self.cookies = transcriber, face_factory, cookies
+        self.workers = workers if workers > 0 else min(8, os.cpu_count() or 2)
         for d in ("downloads", "audio", "asr", "done"):
             (self.work / d).mkdir(parents=True, exist_ok=True)
         self.manifest = Manifest(self.out / "manifest.csv")
@@ -71,7 +76,10 @@ class Pipeline:
         """Licence/channel/title/upload date for the manifest (needed for the dataset paper's datasheet)."""
         p = self.work / "meta" / f"{src.source_id}.json"
         meta = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-        return {k: meta.get(k, "") for k in ("license", "channel", "title", "upload_date")}
+        prov = {k: meta.get(k) or "" for k in ("license", "channel", "title", "upload_date")}
+        if not prov["license"] and meta.get("extractor_key") == "Youtube":
+            prov["license"] = "youtube_standard"  # yt-dlp only reports a licence for Creative Commons videos
+        return prov
 
     def transcribe(self, src: Source, video: Path, start: float, end: float | None) -> tuple[Path, list[Word]]:
         wav = self.work / "audio" / f"{src.source_id}.wav"
@@ -81,7 +89,9 @@ class Pipeline:
         if cache.exists():
             words = [Word(**w) for w in json.loads(cache.read_text(encoding="utf-8"))]
         else:
+            t0 = time.time()
             words = self.transcriber.transcribe(wav)
+            log.info("ASR %s: %d words in %.0f s", src.url, len(words), time.time() - t0)
             cache.write_text(json.dumps([w.__dict__ for w in words], ensure_ascii=False), encoding="utf-8")
         return wav, words
 
@@ -98,10 +108,10 @@ class Pipeline:
         info["ctc_need"] = need
         if not ok:
             return Decision("rejected", "too_many_phonemes", norm.text, info)
-        frames = media.read_frames(video, offset + cand.start, offset + cand.end, c.clip.fps)
+        frames = media.read_frames(video, offset + cand.start, offset + cand.end, c.clip.fps, c.video.out_height)
         detector = self.face_factory()
         try:
-            obs = [detector(f) for f in frames]
+            obs = scan_frames(detector, frames, c.face)
         finally:
             if hasattr(detector, "close"):
                 detector.close()
@@ -127,6 +137,10 @@ class Pipeline:
         if done.exists():
             log.info("skip %s (already processed)", src.url)
             return json.loads(done.read_text(encoding="utf-8"))
+        # An interrupted earlier attempt may have written some clips of this source: remove them, then redo it.
+        for clip_id in self.manifest.drop_source(src.source_id):
+            for ext in (".mp4", ".txt"):
+                (self.out / "raw_videos" / spk / f"{clip_id}{ext}").unlink(missing_ok=True)
         video = self.fetch(src)
         info = media.probe(video)
         counts = {"accepted": 0, "rejected": 0}
@@ -142,21 +156,31 @@ class Pipeline:
             end = min(src.end, info["duration"]) if src.end else info["duration"]
             wav, words = self.transcribe(src, video, start, end)
             audio = media.read_wav(wav)
-            for cand in segment_words(words, self.cfg.clip, end - start):
-                d = self.judge(cand, video, start, audio)
-                row = {**base_row, "start": round(start + cand.start, 3), "end": round(start + cand.end, 3),
-                       "duration": round(cand.duration, 3), "text": d.text, "raw_asr_text": cand.text,
-                       "status": d.status, "reason": d.reason, **d.info}  # fmt: skip
-                if d.status == "accepted":
-                    mp4, txt = clip_paths(self.out, spk, next_index(self.out, spk))
-                    media.cut_clip(video, mp4, start + cand.start, start + cand.end, self.cfg.video.out_height,
-                                   self.cfg.video.out_fps, self.cfg.video.keep_audio)  # fmt: skip
-                    write_transcript(txt, d.text)
-                    row["clip_id"] = mp4.stem
-                self.manifest.add(row)
-                counts[d.status] += 1
+            cands = segment_words(words, self.cfg.clip, end - start)
+            t0 = time.time()
+            # Judging (frame decoding + face + sync) runs in parallel; writing clips stays in order, one at a time.
+            with ThreadPoolExecutor(self.workers) as pool:
+                decisions = pool.map(lambda c: self.judge(c, video, start, audio), cands)
+                for cand, d in zip(cands, decisions):
+                    self._write(src, spk, video, start, cand, d, base_row, counts)
+            log.info("judged %d candidates of %s in %.0f s (%d workers)", len(cands), src.url, time.time() - t0,
+                     self.workers)  # fmt: skip
         write_json(done, counts)
         return counts
+
+    def _write(self, src: Source, spk: str, video: Path, start: float, cand: Candidate, d: Decision,
+               base_row: dict, counts: dict) -> None:  # fmt: skip
+        row = {**base_row, "start": round(start + cand.start, 3), "end": round(start + cand.end, 3),
+               "duration": round(cand.duration, 3), "text": d.text, "raw_asr_text": cand.text,
+               "status": d.status, "reason": d.reason, **d.info}  # fmt: skip
+        if d.status == "accepted":
+            mp4, txt = clip_paths(self.out, spk, next_index(self.out, spk))
+            v = self.cfg.video
+            media.cut_clip(video, mp4, start + cand.start, start + cand.end, v.out_height, v.out_fps, v.keep_audio)
+            write_transcript(txt, d.text)
+            row["clip_id"] = mp4.stem
+        self.manifest.add(row)
+        counts[d.status] += 1
 
     def run(self, sources: list[Source], progress: Callable | None = None) -> dict:
         ids = speaker_ids(sources)

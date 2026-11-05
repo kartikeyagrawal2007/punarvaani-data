@@ -8,6 +8,7 @@ Backends (choose with ``asr.backend`` in the config):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,7 @@ class FasterWhisper(Transcriber):
         self.model = WhisperModel(
             model, device=device, compute_type="default" if compute_type == "auto" else compute_type
         )
+        logging.getLogger("pvdata").info("faster-whisper %s on %s", model, getattr(self.model.model, "device", "?"))
 
     def transcribe(self, wav):
         segments, _ = self.model.transcribe(str(wav), language=self.language, word_timestamps=True,

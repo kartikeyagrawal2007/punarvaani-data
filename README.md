@@ -48,7 +48,7 @@ git clone <this repo> && cd punarvaani-data
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[download,asr,dev]"     # yt-dlp + faster-whisper
 # ffmpeg must be installed:  macOS: brew install ffmpeg   Ubuntu/Colab: apt-get install -y ffmpeg
-pytest -q                                 # 27 tests, ~30 s, no internet needed
+pytest -q                                 # 30 tests, ~40 s, no internet needed
 ```
 
 ASR is the slow part: use a GPU (Colab/Kaggle) for real runs. Cutting clips and face checks run fine on a laptop.

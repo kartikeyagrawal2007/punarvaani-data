@@ -54,3 +54,19 @@ def test_sync_rejects_still_mouth_and_silence():
 def test_loudness_envelope_length():
     audio = np.random.default_rng(0).normal(size=16000).astype(np.float32)
     assert loudness_envelope(audio, 16000, 25, 25).shape == (25,)
+
+
+def test_scan_frames_stops_once_the_clip_cannot_pass():
+    from pvdata.face import scan_frames
+
+    calls = []
+
+    def no_face(frame):
+        calls.append(frame)
+        return FaceObs(0)
+
+    cfg = FaceConfig()  # 95% rule: a 50-frame clip may lose at most 2 frames
+    obs = scan_frames(no_face, list(range(50)), cfg)
+    assert len(calls) == 3 and not check_clip(obs, cfg).ok
+    good = FaceObs(1, face_h_frac=0.4, mouth_w_px=100)
+    assert len(scan_frames(lambda f: good, list(range(50)), cfg)) == 50

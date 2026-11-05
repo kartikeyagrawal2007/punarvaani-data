@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import subprocess
@@ -44,8 +45,8 @@ def read_info(video_path: str | Path) -> dict:
     return {k: info.get(k) or "" for k in ("id", "license", "channel", "title", "upload_date")}
 
 
-def probe(path: str | Path) -> dict:
-    """Width, height, fps and duration of the first video stream."""
+@functools.lru_cache(maxsize=64)
+def _probe(path: str, mtime: float) -> dict:
     cmd = [_require("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries",
            "stream=width,height,r_frame_rate:format=duration", "-of", "json", str(path)]  # fmt: skip
     info = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
@@ -57,6 +58,12 @@ def probe(path: str | Path) -> dict:
         "fps": float(num) / float(den) if float(den) else 0.0,
         "duration": float(info["format"]["duration"]),
     }
+
+
+def probe(path: str | Path) -> dict:
+    """Width, height, fps and duration of the first video stream (cached per file)."""
+    p = Path(path)
+    return dict(_probe(str(p.resolve()), p.stat().st_mtime))
 
 
 def extract_audio(video: str | Path, wav: str | Path, start: float | None = None, end: float | None = None) -> Path:
@@ -96,14 +103,22 @@ def cut_clip(video: str | Path, out: str | Path, start: float, end: float, heigh
     return out
 
 
-def read_frames(video: str | Path, start: float = 0.0, end: float | None = None, fps: int = 25) -> np.ndarray:
-    """RGB frames of [start, end] resampled to ``fps`` via ffmpeg -> (T, H, W, 3) uint8."""
+def read_frames(video: str | Path, start: float = 0.0, end: float | None = None, fps: int = 25,
+                max_height: int | None = None) -> np.ndarray:  # fmt: skip
+    """RGB frames of [start, end] resampled to ``fps`` via ffmpeg -> (T, H, W, 3) uint8.
+
+    ``max_height`` scales taller sources down (e.g. 1080p -> 720p, the clip output size), which keeps the face
+    checks measuring what the trainer will see and makes decoding much cheaper."""
     info = probe(video)
     w, h = info["width"], info["height"]
+    vf = f"fps={fps}"
+    if max_height and h > max_height:
+        w, h = int(round(w * max_height / h / 2)) * 2, max_height
+        vf += f",scale={w}:{h}"
     cmd = [_require("ffmpeg"), "-loglevel", "error", "-ss", f"{start:.3f}", "-i", str(video)]
     if end is not None:
         cmd += ["-t", f"{end - start:.3f}"]
-    cmd += ["-vf", f"fps={fps}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    cmd += ["-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     raw = subprocess.run(cmd, check=True, capture_output=True).stdout
     frames = np.frombuffer(raw, dtype=np.uint8)
     return frames.reshape(-1, h, w, 3)

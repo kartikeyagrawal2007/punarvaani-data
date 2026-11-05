@@ -34,7 +34,8 @@ def _cmd_run(args) -> int:
     a = cfg.asr
     transcriber = make_transcriber(a.backend, args.asr_model or a.model, a.language, a.device, a.compute_type)
     pipe = Pipeline(cfg, args.out, args.work or Path(args.out) / "work", transcriber,
-                    lambda: MediaPipeFaces(args.face_model, cfg.clip.fps), cookies=args.cookies)  # fmt: skip
+                    lambda: MediaPipeFaces(args.face_model, cfg.clip.fps), cookies=args.cookies,
+                    workers=args.workers)  # fmt: skip
     report = pipe.run(sources, progress=lambda s: tqdm(s, desc="sources"))
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
@@ -102,6 +103,12 @@ def main(argv=None) -> int:
     r.add_argument("--cookies", help="cookies.txt for yt-dlp if YouTube asks to sign in")
     r.add_argument("--no-sync", action="store_true", help="skip the audio-mouth sync check")
     r.add_argument("--limit", type=int, help="only the first N sources (for a quick test)")
+    r.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="candidates checked in parallel (default: number of CPU cores, at most 8)",
+    )
     r.set_defaults(fn=_cmd_run)
 
     f = sub.add_parser("find", help="build a sources CSV from YouTube searches (speaker,query per row)")

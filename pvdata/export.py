@@ -55,6 +55,18 @@ class Manifest:
         with open(self.path, "a", encoding="utf-8", newline="") as f:
             csv.DictWriter(f, MANIFEST_FIELDS, extrasaction="ignore").writerow(row)
 
+    def drop_source(self, source_id: str) -> list[str]:
+        """Remove the rows of one source (from an interrupted run) and return the clip ids they had written."""
+        rows = self.rows()
+        keep = [r for r in rows if r.get("source_id") != source_id]
+        if len(keep) == len(rows):
+            return []
+        with open(self.path, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, MANIFEST_FIELDS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(keep)
+        return [r["clip_id"] for r in rows if r.get("source_id") == source_id and r.get("clip_id")]
+
     def rows(self) -> list[dict]:
         with open(self.path, encoding="utf-8", newline="") as f:
             return list(csv.DictReader(f))

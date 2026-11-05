@@ -117,6 +117,24 @@ def frame_problem(o: FaceObs, cfg: FaceConfig) -> str | None:
     return None
 
 
+def scan_frames(detector, frames, cfg: FaceConfig) -> list[FaceObs]:
+    """Run the detector over a clip, stopping as soon as too many frames have failed for the clip to pass.
+
+    With ``min_detect_ratio`` 0.95 a 50-frame clip may fail at most 2 frames, so stock footage and cutaways
+    are rejected after about 3 frames instead of 50. The returned partial list still fails ``check_clip``.
+    """
+    budget = int(len(frames) * (1 - cfg.min_detect_ratio) + 1e-9)
+    obs, bad = [], 0
+    for f in frames:
+        o = detector(f)
+        obs.append(o)
+        if frame_problem(o, cfg) is not None:
+            bad += 1
+            if bad > budget:
+                break
+    return obs
+
+
 def check_clip(observations: list[FaceObs], cfg: FaceConfig) -> FaceReport:
     if not observations:
         return FaceReport(False, "no_frames", 0.0)
