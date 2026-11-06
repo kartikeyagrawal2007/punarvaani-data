@@ -138,3 +138,23 @@ def test_parallel_judging_matches_serial(tmp_path):
         pipe.run([Source(str(video), "ravi")])
         rows[workers] = [(r["start"], r["status"], r["reason"], r["clip_id"]) for r in pipe.manifest.rows()]
     assert rows[1] == rows[4]
+
+
+def test_split_by_clips_keeps_a_dominant_speaker_in_train():
+    counts = [499, 149, 52, 1425, 58, 34, 23, 45, 123, 13, 4, 20]  # the first real run: spk04 has 58% of clips
+    clips = {f"spk{i:02d}": c for i, c in enumerate(counts, 1)}
+    total = sum(counts)
+    for seed in range(20):
+        s = speaker_splits(list(clips), 0.1, 0.1, seed, clips)
+        assert sorted(s["train"] + s["val"] + s["test"]) == sorted(clips)
+        assert "spk01" in s["train"] and "spk04" in s["train"] and len(s["train"]) == 10
+        for split in ("val", "test"):
+            assert 0.02 * total <= sum(clips[x] for x in s[split]) <= 0.15 * total
+
+
+def test_youtube_rows_without_licence_are_youtube_standard():
+    from pvdata.export import license_of
+
+    assert license_of({"license": "", "source_url": "https://www.youtube.com/watch?v=x"}) == "youtube_standard"
+    assert license_of({"license": "Creative Commons Attribution license (reuse allowed)"}).startswith("Creative")
+    assert license_of({"source_url": "C:/videos/local.mp4"}) == "unknown"

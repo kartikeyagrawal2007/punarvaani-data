@@ -152,7 +152,7 @@ flowchart LR
 **1. Install** (once):
 ```bash
 cd ~/punarvaani-data && source .venv/bin/activate
-pytest -q                     # 30 passed
+pytest -q                     # 32 passed
 ```
 
 **2. Find videos:**

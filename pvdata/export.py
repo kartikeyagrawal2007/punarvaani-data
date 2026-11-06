@@ -72,6 +72,18 @@ class Manifest:
             return list(csv.DictReader(f))
 
 
+def is_youtube(url: str) -> bool:
+    return any(h in (url or "") for h in ("youtube.com/", "youtu.be/"))
+
+
+def license_of(row: dict) -> str:
+    """yt-dlp only reports a licence for Creative Commons videos; any other YouTube video is under YouTube's
+    standard licence (release IDs + timestamps only)."""
+    if row.get("license"):
+        return row["license"]
+    return "youtube_standard" if is_youtube(row.get("source_url", "")) else "unknown"
+
+
 def build_report(rows: list[dict]) -> dict:
     accepted = [r for r in rows if r["status"] == "accepted"]
     hours = sum(float(r["duration"]) for r in accepted) / 3600
@@ -83,18 +95,31 @@ def build_report(rows: list[dict]) -> dict:
         "accepted_hours": round(hours, 3),
         "speakers": len(per_speaker),
         "clips_per_speaker": dict(sorted(per_speaker.items())),
-        "accepted_by_license": dict(Counter(r.get("license") or "unknown" for r in accepted).most_common()),
+        "accepted_by_license": dict(Counter(license_of(r) for r in accepted).most_common()),
         "rejected_by_reason": dict(Counter(r["reason"] for r in rows if r["status"] != "accepted").most_common()),
     }
 
 
-def speaker_splits(speakers: list[str], val_frac: float, test_frac: float, seed: int = 0) -> dict[str, list[str]]:
-    """Speaker-disjoint split: every speaker's clips go to exactly one of train / val / test."""
+def speaker_splits(speakers: list[str], val_frac: float, test_frac: float, seed: int = 0,
+                   clips: dict[str, int] | None = None) -> dict[str, list[str]]:  # fmt: skip
+    """Speaker-disjoint split: every speaker's clips go to exactly one of train / val / test.
+
+    The fractions set how many *speakers* go to val and test (at least one each). With ``clips`` (clips per
+    speaker), val/test speakers are drawn only from mid-sized ones (2-15% of all clips) when there are enough:
+    a speaker with half the data never becomes the test set, and a 4-clip speaker never becomes a useless one.
+    """
     s = sorted(set(speakers))
     random.Random(seed).shuffle(s)
     n = len(s)
     n_test = max(1, round(n * test_frac)) if n >= 3 and test_frac > 0 else 0
     n_val = max(1, round(n * val_frac)) if n >= 2 and val_frac > 0 else 0
+    if clips:
+        total = sum(clips.get(x, 0) for x in s) or 1
+        share = {x: clips.get(x, 0) / total for x in s}
+        mid = [x for x in s if 0.02 <= share[x] <= 0.15]
+        not_big = [x for x in s if share[x] <= 0.15 and x not in mid]
+        rest = [x for x in s if x not in mid and x not in not_big]
+        s = mid + sorted(not_big, key=lambda x: -share[x]) + rest  # preferred val/test speakers first
     return {
         "test": sorted(s[:n_test]),
         "val": sorted(s[n_test : n_test + n_val]),

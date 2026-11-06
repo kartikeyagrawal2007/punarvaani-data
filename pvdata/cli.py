@@ -69,7 +69,8 @@ def _cmd_split(args) -> int:
     cfg = Config.load(args.config)
     out = Path(args.out)
     speakers = sorted(p.name for p in (out / "raw_videos").iterdir() if p.is_dir())
-    splits = speaker_splits(speakers, cfg.val_frac, cfg.test_frac, cfg.seed)
+    clips = {spk: len(list((out / "raw_videos" / spk).glob("*.mp4"))) for spk in speakers}
+    splits = speaker_splits(speakers, cfg.val_frac, cfg.test_frac, cfg.seed, clips)
     write_json(out / "splits.json", splits)
     counts = materialise_splits(out, splits, link=not args.copy)
     print(json.dumps({"speakers": splits, "clips": counts}, ensure_ascii=False, indent=2))

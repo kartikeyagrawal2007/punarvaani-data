@@ -28,7 +28,7 @@ from pvdata import media
 from pvdata.asr import Transcriber, Word
 from pvdata.config import Config
 from pvdata.ctc import fits_ctc
-from pvdata.export import Manifest, build_report, clip_paths, next_index, write_json, write_transcript
+from pvdata.export import Manifest, build_report, clip_paths, is_youtube, next_index, write_json, write_transcript
 from pvdata.face import FaceObs, check_clip, scan_frames
 from pvdata.segment import Candidate, segment_words
 from pvdata.sources import Source, speaker_ids
@@ -77,7 +77,7 @@ class Pipeline:
         p = self.work / "meta" / f"{src.source_id}.json"
         meta = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
         prov = {k: meta.get(k) or "" for k in ("license", "channel", "title", "upload_date")}
-        if not prov["license"] and meta.get("extractor_key") == "Youtube":
+        if not prov["license"] and is_youtube(src.url):
             prov["license"] = "youtube_standard"  # yt-dlp only reports a licence for Creative Commons videos
         return prov
 
