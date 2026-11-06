@@ -127,6 +127,19 @@ def speaker_splits(speakers: list[str], val_frac: float, test_frac: float, seed:
     }
 
 
+def grouped_splits(folders: list[str], clips: dict[str, int], groups: dict[str, list[str]] | None, val_frac: float,
+                   test_frac: float, seed: int = 0) -> dict[str, list[str]]:  # fmt: skip
+    """Like speaker_splits, but folders of the same person (``groups``: person -> folders, from `pvdata identify`)
+    always land in the same split. Folders in no group count as their own person."""
+    owner = {f: g for g, fs in (groups or {}).items() for f in fs if f in clips}
+    members: dict[str, list[str]] = {}
+    for f in folders:
+        members.setdefault(owner.get(f, f), []).append(f)
+    gclips = {g: sum(clips.get(f, 0) for f in fs) for g, fs in members.items()}
+    gs = speaker_splits(list(members), val_frac, test_frac, seed, gclips)
+    return {k: sorted(f for g in v for f in members[g]) for k, v in gs.items()}
+
+
 def write_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

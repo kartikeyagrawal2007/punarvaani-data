@@ -18,7 +18,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,16 +49,30 @@ class Decision:
 class Pipeline:
     def __init__(self, cfg: Config, out: str | Path, work: str | Path, transcriber: Transcriber,
                  face_factory: Callable[[], Callable[[np.ndarray], FaceObs]], cookies: str | None = None,
-                 workers: int = 1):  # fmt: skip
+                 workers: int = 1, keep_downloads: bool = True):  # fmt: skip
         self.cfg, self.out, self.work = cfg, Path(out), Path(work)
         self.transcriber, self.face_factory, self.cookies = transcriber, face_factory, cookies
         self.workers = workers if workers > 0 else min(8, os.cpu_count() or 2)
+        self.keep_downloads = keep_downloads
+        self._downloader = ThreadPoolExecutor(1)  # fetches the next video while the current one is processed
+        self._pending: dict[str, Future] = {}
         for d in ("downloads", "audio", "asr", "done"):
             (self.work / d).mkdir(parents=True, exist_ok=True)
         self.manifest = Manifest(self.out / "manifest.csv")
 
     # ---------------------------------------------------------------- stages
+    def prefetch(self, src: Source) -> None:
+        """Start downloading ``src`` in the background (no-op if it is local, finished or already pending)."""
+        sid = src.source_id
+        if src.is_local or sid in self._pending or (self.work / "done" / f"{sid}.json").exists():
+            return
+        self._pending[sid] = self._downloader.submit(self._fetch, src)
+
     def fetch(self, src: Source) -> Path:
+        pending = self._pending.pop(src.source_id, None)
+        return pending.result() if pending is not None else self._fetch(src)
+
+    def _fetch(self, src: Source) -> Path:
         if src.is_local:
             return Path(src.url)
         final = self.work / "downloads" / f"{src.source_id}.mp4"
@@ -71,6 +85,19 @@ class Pipeline:
         path.with_suffix(".info.json").unlink(missing_ok=True)
         path.rename(final)
         return final
+
+    def release(self, src: Source) -> None:
+        """Delete the full download and audio of a finished source (the ASR cache and metadata stay)."""
+        if self.keep_downloads or src.is_local:
+            return
+        for p in (self.work / "downloads" / f"{src.source_id}.mp4", self.work / "audio" / f"{src.source_id}.wav"):
+            p.unlink(missing_ok=True)
+
+    def accept_text(self, text: str) -> bool:
+        """Cheap pre-check used to choose clip boundaries: would this text pass the transcript and CTC rules?"""
+        t = self.cfg.text
+        norm = normalize_transcript(text, t.spell_out_numbers, t.reject_latin)
+        return norm.ok and fits_ctc(norm.text, self.cfg.clip.ctc_steps)[0]
 
     def provenance(self, src: Source) -> dict:
         """Licence/channel/title/upload date for the manifest (needed for the dataset paper's datasheet)."""
@@ -143,7 +170,7 @@ class Pipeline:
                 (self.out / "raw_videos" / spk / f"{clip_id}{ext}").unlink(missing_ok=True)
         video = self.fetch(src)
         info = media.probe(video)
-        counts = {"accepted": 0, "rejected": 0}
+        counts = {"accepted": 0, "rejected": 0, "accepted_s": 0.0}
         base_row = {"speaker": spk, "speaker_name": src.speaker, "source_url": src.url, "source_id": src.source_id,
                     **self.provenance(src)}  # fmt: skip
         if info["height"] < self.cfg.video.min_height:
@@ -156,7 +183,7 @@ class Pipeline:
             end = min(src.end, info["duration"]) if src.end else info["duration"]
             wav, words = self.transcribe(src, video, start, end)
             audio = media.read_wav(wav)
-            cands = segment_words(words, self.cfg.clip, end - start)
+            cands = segment_words(words, self.cfg.clip, end - start, accept=self.accept_text)
             t0 = time.time()
             # Judging (frame decoding + face + sync) runs in parallel; writing clips stays in order, one at a time.
             with ThreadPoolExecutor(self.workers) as pool:
@@ -165,7 +192,9 @@ class Pipeline:
                     self._write(src, spk, video, start, cand, d, base_row, counts)
             log.info("judged %d candidates of %s in %.0f s (%d workers)", len(cands), src.url, time.time() - t0,
                      self.workers)  # fmt: skip
+        counts["accepted_s"] = round(counts["accepted_s"], 2)
         write_json(done, counts)
+        self.release(src)
         return counts
 
     def _write(self, src: Source, spk: str, video: Path, start: float, cand: Candidate, d: Decision,
@@ -179,22 +208,39 @@ class Pipeline:
             media.cut_clip(video, mp4, start + cand.start, start + cand.end, v.out_height, v.out_fps, v.keep_audio)
             write_transcript(txt, d.text)
             row["clip_id"] = mp4.stem
+            counts["accepted_s"] += cand.duration
         self.manifest.add(row)
         counts[d.status] += 1
 
+    def assign_ids(self, sources: list[Source]) -> dict[str, str]:
+        """speaker name -> spkNN, keeping the numbers already in speakers.json so ids never change between runs."""
+        path = self.out / "speakers.json"
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        ids = speaker_ids(sources, {name: spk for spk, name in existing.items()})
+        write_json(path, {v: k for k, v in ids.items()})
+        return ids
+
+    def run_safe(self, src: Source, spk: str) -> dict | None:
+        """run_source, but a failure is logged and recorded in the manifest instead of stopping a long run."""
+        try:
+            c = self.run_source(src, spk)
+            log.info("%s -> %s", src.url, c)
+            return c
+        except Exception as e:  # one bad video must not stop a long run
+            log.error("failed: %s: %s: %s", src.url, type(e).__name__, e)
+            log.debug("traceback", exc_info=True)
+            self.manifest.add({"speaker": spk, "speaker_name": src.speaker, "source_url": src.url,
+                               "source_id": src.source_id, "status": "rejected",
+                               "reason": f"source_error:{type(e).__name__}"})  # fmt: skip
+            return None
+
     def run(self, sources: list[Source], progress: Callable | None = None) -> dict:
-        ids = speaker_ids(sources)
-        write_json(self.out / "speakers.json", {v: k for k, v in ids.items()})
+        ids = self.assign_ids(sources)
         it = progress(sources) if progress else sources
-        for src in it:
-            try:
-                c = self.run_source(src, ids[src.speaker])
-                log.info("%s -> %s", src.url, c)
-            except Exception as e:  # one bad video must not stop a long run
-                log.exception("failed: %s", src.url)
-                self.manifest.add({"speaker": ids[src.speaker], "speaker_name": src.speaker, "source_url": src.url,
-                                   "source_id": src.source_id, "status": "rejected",
-                                   "reason": f"source_error:{type(e).__name__}"})  # fmt: skip
+        for i, src in enumerate(it):
+            if i + 1 < len(sources):
+                self.prefetch(sources[i + 1])
+            self.run_safe(src, ids[src.speaker])
         report = build_report(self.manifest.rows())
         write_json(self.out / "report.json", report)
         return report

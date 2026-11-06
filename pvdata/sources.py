@@ -68,10 +68,15 @@ def read_sources(path: str | Path) -> list[Source]:
     return rows
 
 
-def speaker_ids(sources: list[Source]) -> dict[str, str]:
-    """Map free-form speaker names to spk01, spk02, ... in order of first appearance."""
-    mapping: dict[str, str] = {}
+def speaker_ids(sources: list[Source], existing: dict[str, str] | None = None) -> dict[str, str]:
+    """Map free-form speaker names to spk01, spk02, ... in order of first appearance. Names already in
+    ``existing`` (name -> spkNN, e.g. from an earlier run's speakers.json) keep their number; new names get
+    the next free numbers."""
+    mapping: dict[str, str] = dict(existing or {})
+    used = {int(v[3:]) for v in mapping.values() if v[3:].isdigit()}
+    n = max(used, default=0)
     for s in sources:
         if s.speaker not in mapping:
-            mapping[s.speaker] = f"spk{len(mapping) + 1:02d}"
+            n += 1
+            mapping[s.speaker] = f"spk{n:02d}"
     return mapping

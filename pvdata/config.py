@@ -65,6 +65,49 @@ class ASRConfig:
 
 
 @dataclass
+class ScreenConfig:
+    """Automatic review of a video from a few short low-resolution samples, before downloading all of it."""
+
+    samples: int = 3  # pieces spread over the video (at 20%, 50%, 80% of its length for 3)
+    sample_s: float = 20.0
+    height: int = 360
+    fps: float = 2.0  # frames checked per second of sample
+    min_face_ratio: float = 0.5  # share of sampled frames with one frontal, big-enough face
+    min_hindi_prob: float = 0.6  # Whisper language ID, Hindi + Urdu (spoken Hindi is often tagged Urdu)
+    min_devanagari_ratio: float = 0.85  # share of transcribed words that are pure Devanagari (not English)
+    min_words_per_s: float = 1.0  # someone is actually talking
+
+
+@dataclass
+class AutoConfig:
+    """`pvdata auto`: discover -> screen -> mine until the dataset reaches ``target_hours``."""
+
+    target_hours: float = 100.0
+    min_minutes: float = 4.0  # video length range considered
+    max_minutes: float = 60.0
+    search_pool: int = 50  # results per seed query in the first round; doubles each round up to max_search_pool
+    max_search_pool: int = 400
+    max_videos_per_channel: int = 25  # speaker diversity: no channel (usually one person) dominates
+    max_hours_per_channel: float = 3.0
+    expand_after_videos: int = 2  # list a channel's other uploads once this many of its videos were mined ...
+    expand_min_minutes_per_video: float = 1.0  # ... and they gave at least this many accepted minutes each
+    channel_list_size: int = 60
+    keep_downloads: bool = False  # delete the full video and audio once a source is mined (disk!)
+    exclude_title_regex: str = (
+        r"(?i)debate|panel|compilation|#shorts|\bshorts\b|jukebox|trailer|song|lyrics|gaana|reaction|"
+        r"live stream|बहस|डिबेट|गाना|गीत|भजन|मुकाबला|दंगल"
+    )
+
+
+@dataclass
+class IdentityConfig:
+    """Face-embedding speaker identity (OpenCV YuNet + SFace) for automatically mined videos."""
+
+    frames_per_clip: int = 3
+    same_person: float = 0.40  # cosine similarity of SFace embeddings (OpenCV suggests 0.363)
+
+
+@dataclass
 class Config:
     clip: ClipConfig = field(default_factory=ClipConfig)
     text: TextConfig = field(default_factory=TextConfig)
@@ -72,6 +115,9 @@ class Config:
     sync: SyncConfig = field(default_factory=SyncConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
+    screen: ScreenConfig = field(default_factory=ScreenConfig)
+    auto: AutoConfig = field(default_factory=AutoConfig)
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
     val_frac: float = 0.1
     test_frac: float = 0.1
     seed: int = 0

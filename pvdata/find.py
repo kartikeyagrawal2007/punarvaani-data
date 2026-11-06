@@ -14,11 +14,12 @@ Delete those rows before ``pvdata run``.
 from __future__ import annotations
 
 import csv
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from pvdata.media import _require
+from pvdata.media import _require, _run
+
+PRINT_FMT = "%(id)s\t%(duration)s\t%(title)s\t%(channel)s\t%(channel_id)s"
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Hit:
     duration: float
     title: str
     channel: str
+    channel_id: str = ""
 
     @property
     def url(self) -> str:
@@ -43,15 +45,29 @@ def parse_hits(stdout: str) -> list[Hit]:
             dur = float(parts[1])
         except ValueError:
             dur = 0.0
-        hits.append(Hit(parts[0], dur, parts[2].strip(), parts[3].strip()))
+        cid = parts[4].strip() if len(parts) > 4 and parts[4].strip() not in ("NA", "None") else ""
+        hits.append(Hit(parts[0], dur, parts[2].strip(), parts[3].strip(), cid))
+    return hits
+
+
+def search_raw(query: str, pool: int = 25) -> list[Hit]:
+    """Top ``pool`` YouTube search results (metadata only, nothing is downloaded)."""
+    cmd = [_require("yt-dlp"), "--flat-playlist", "--no-warnings", "--print", PRINT_FMT, f"ytsearch{pool}:{query}"]
+    return parse_hits(_run(cmd, text=True).stdout)
+
+
+def channel_videos(channel_id: str, n: int = 50) -> list[Hit]:
+    """The newest ``n`` uploads of a channel (metadata only)."""
+    url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    cmd = [_require("yt-dlp"), "--flat-playlist", "--no-warnings", "--playlist-end", str(n), "--print", PRINT_FMT, url]
+    hits = parse_hits(_run(cmd, text=True).stdout)
+    for h in hits:
+        h.channel_id = h.channel_id or channel_id
     return hits
 
 
 def search(query: str, n: int, min_minutes: float, max_minutes: float, pool: int = 25) -> list[Hit]:
-    cmd = [_require("yt-dlp"), "--flat-playlist", "--no-warnings", "--print",
-           "%(id)s\t%(duration)s\t%(title)s\t%(channel)s", f"ytsearch{pool}:{query}"]  # fmt: skip
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-    ok = [h for h in parse_hits(out) if min_minutes * 60 <= h.duration <= max_minutes * 60]
+    ok = [h for h in search_raw(query, pool) if min_minutes * 60 <= h.duration <= max_minutes * 60]
     return ok[:n]
 
 

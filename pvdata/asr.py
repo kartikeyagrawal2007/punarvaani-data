@@ -25,6 +25,10 @@ class Transcriber:
     def transcribe(self, wav: str | Path) -> list[Word]:  # pragma: no cover - interface
         raise NotImplementedError
 
+    def language_probs(self, wav: str | Path) -> dict[str, float] | None:
+        """Spoken-language probabilities (e.g. {"hi": 0.8, "ur": 0.1, ...}), or None if the backend can't tell."""
+        return None
+
 
 class FasterWhisper(Transcriber):
     def __init__(self, model: str = "large-v3", language: str = "hi", device: str = "auto", compute_type: str = "auto"):
@@ -41,6 +45,11 @@ class FasterWhisper(Transcriber):
                                             vad_filter=True, condition_on_previous_text=False)  # fmt: skip
         return [Word(w.word.strip(), float(w.start), float(w.end), float(w.probability))
                 for seg in segments for w in (seg.words or []) if w.word.strip()]  # fmt: skip
+
+    def language_probs(self, wav):
+        _, info = self.model.transcribe(str(wav), language=None, vad_filter=True)  # detection runs eagerly
+        probs = dict(getattr(info, "all_language_probs", None) or [])
+        return probs or {info.language: float(info.language_probability)}
 
 
 class WhisperX(Transcriber):

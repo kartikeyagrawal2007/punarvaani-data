@@ -48,7 +48,7 @@ git clone <this repo> && cd punarvaani-data
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[download,asr,dev]"     # yt-dlp + faster-whisper
 # ffmpeg must be installed:  macOS: brew install ffmpeg   Ubuntu/Colab: apt-get install -y ffmpeg
-pytest -q                                 # 32 tests, ~45 s, no internet needed
+pytest -q                                 # 42 tests, ~45 s, no internet needed
 ```
 
 ASR is the slow part: use a GPU (Colab/Kaggle) for real runs. Cutting clips and face checks run fine on a laptop.
@@ -96,6 +96,31 @@ python scripts/preprocess_lips.py --input_dir /path/to/dataset/raw_videos --outp
 !pvdata run --sources sources/my_sources.csv --out /content/drive/MyDrive/punarvaani_dataset
 !pvdata validate /content/drive/MyDrive/punarvaani_dataset/raw_videos && pvdata split --out /content/drive/MyDrive/punarvaani_dataset
 ```
+
+## Autopilot: grow to 100 hours without reviewing videos (`pvdata auto`)
+
+```bash
+pvdata screen "https://www.youtube.com/watch?v=XXXX"            # dry run: would autopilot take this video?
+pvdata auto --seeds sources/seeds.csv --out dataset/ --max-videos 5   # short test
+pvdata auto --seeds sources/seeds.csv --out dataset/               # until 100 h (auto.target_hours)
+pvdata identify --out dataset/ --quarantine                        # who is who: merge persons, remove guests
+pvdata split --out dataset/                                        # now keeps each person in one split
+```
+
+```
+seed queries ─► discover: YouTube search, length 4–60 min, title filter (debate, panel, song, shorts ... dropped)
+             ─► screen:   3 × 20 s samples at 360p (a few MB): one frontal face in ≥ 50% of frames,
+                          Whisper says Hindi, ≥ 85% Devanagari words, someone talking
+             ─► mine:     the normal pipeline (720p download, next video downloads in the background,
+                          full video deleted afterwards)
+             ─► learn:    a channel that gives ≥ 1 accepted min/video after 2 videos gets its other uploads queued
+caps per channel (25 videos, 3 h) keep any one person from dominating; best-scoring videos are mined first
+```
+
+- Every video is its own speaker folder (`<channel>_<videoid>` in `speakers.json`). **`pvdata identify`** embeds the faces (OpenCV YuNet + SFace), merges folders of the same person into one entry of `identity/persons.json`, and with `--quarantine` moves clips of other faces (guests, co-anchors) to `quarantine/`. `pvdata split` then never puts one person in two splits.
+- Stop with Ctrl+C at any time; rerunning continues. Everything decided is in `dataset/auto/state.json` (status and reason for every video seen).
+- Add seed queries any time (especially for women speakers and regional accents). Each round searches deeper (top 50 → 100 → 200 → 400).
+- Disk: clips only (the full videos are deleted). Check `raw_videos` size ÷ number of clips × the clips you expect.
 
 ## Choosing videos (this decides the quality more than any setting)
 
@@ -156,7 +181,11 @@ Thresholds are in `configs/default.yaml`; copy it and pass `--config my.yaml` to
 | `pvdata/ctc.py` + `pvdata/g2p/` | the trainer's CTC length rule with the trainer's own G2P |
 | `pvdata/face.py` | MediaPipe face count, head pose, face/mouth size, mouth opening |
 | `pvdata/sync.py` | audio-loudness vs mouth-opening correlation (a light stand-in for SyncNet) |
-| `pvdata/pipeline.py` | runs everything per video, resumable |
+| `pvdata/pipeline.py` | runs everything per video, resumable; downloads the next video in the background |
+| `pvdata/find.py` | YouTube search and channel listing (metadata only) |
+| `pvdata/screen.py` | automatic review of a video from 3 short low-res samples |
+| `pvdata/auto.py` | the autopilot loop: discover → screen → mine → expand good channels, with caps |
+| `pvdata/identity.py` | face embeddings → persons, other-face clips, cached |
 | `pvdata/export.py`, `pvdata/validate.py` | output layout, manifest, report, splits, validation |
 
 ## Notes

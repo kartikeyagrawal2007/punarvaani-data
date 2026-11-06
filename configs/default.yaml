@@ -40,3 +40,28 @@ asr:
 val_frac: 0.1
 test_frac: 0.1
 seed: 0
+# --- `pvdata auto` (discover -> screen -> mine) and `pvdata identify` -----------------------------------
+screen:
+  samples: 3                 # 3 x 20 s pieces at 360p decide whether a video is worth downloading
+  sample_s: 20.0
+  height: 360
+  fps: 2.0
+  min_face_ratio: 0.5        # one frontal, big-enough face in >= half of the sampled frames
+  min_hindi_prob: 0.6        # Whisper language ID (Hindi + Urdu)
+  min_devanagari_ratio: 0.85 # mostly Hindi words, not English
+  min_words_per_s: 1.0
+auto:
+  target_hours: 100.0
+  min_minutes: 4.0
+  max_minutes: 60.0
+  search_pool: 50
+  max_search_pool: 400
+  max_videos_per_channel: 25 # speaker diversity
+  max_hours_per_channel: 3.0
+  expand_after_videos: 2
+  expand_min_minutes_per_video: 1.0
+  channel_list_size: 60
+  keep_downloads: false      # delete each full video after mining it
+identity:
+  frames_per_clip: 3
+  same_person: 0.40

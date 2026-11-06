@@ -1,6 +1,9 @@
 """``pvdata`` command line.
 
 pvdata run      --sources sources/my_sources.csv --out dataset/      # mine clips
+pvdata auto     --seeds sources/seeds.csv --out dataset/           # find + screen + mine until --target-hours
+pvdata screen   https://www.youtube.com/watch?v=XXXX                 # would auto accept this video? (dry run)
+pvdata identify --out dataset/                                       # face ids: merge persons, flag guests
 pvdata validate dataset/raw_videos                                   # check the TEAM_GUIDE rules
 pvdata split    --out dataset/                                       # speaker-disjoint train/val/test
 pvdata report   --out dataset/                                       # counts + rejection reasons
@@ -41,6 +44,63 @@ def _cmd_run(args) -> int:
     return 0
 
 
+def _models(args, cfg):
+    from pvdata.asr import make_transcriber
+
+    a = cfg.asr
+    return make_transcriber(a.backend, getattr(args, "asr_model", None) or a.model, a.language, a.device,
+                            a.compute_type)  # fmt: skip
+
+
+def _cmd_auto(args) -> int:
+    from pvdata.auto import AutoPilot, read_seeds
+    from pvdata.face import MediaPipeFaces
+    from pvdata.find import channel_videos, search_raw
+    from pvdata.pipeline import Pipeline
+    from pvdata.screen import Screener
+
+    cfg = Config.load(args.config)
+    if args.keep_downloads:
+        cfg.auto.keep_downloads = True
+    work = args.work or Path(args.out) / "work"
+    transcriber = _models(args, cfg)
+    pipe = Pipeline(cfg, args.out, work, transcriber, lambda: MediaPipeFaces(args.face_model, cfg.clip.fps),
+                    cookies=args.cookies, workers=args.workers, keep_downloads=cfg.auto.keep_downloads)  # fmt: skip
+    screener = Screener(cfg, work, transcriber, lambda fps: MediaPipeFaces(args.face_model, fps), args.cookies)
+    pilot = AutoPilot(cfg, args.out, read_seeds(args.seeds), pipe, screener, search_raw, channel_videos)
+    summary = pilot.run(args.target_hours, args.max_videos)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_screen(args) -> int:
+    import re
+
+    from pvdata.face import MediaPipeFaces
+    from pvdata.find import search_raw
+    from pvdata.screen import Screener
+
+    cfg = Config.load(args.config)
+    m = re.search(r"(?:v=|youtu\.be/)([\w-]{11})", args.video)
+    vid = m.group(1) if m else args.video
+    hits = [h for h in search_raw(vid, 5) if h.video_id == vid]  # cheapest way to get the duration
+    duration = args.duration or (hits[0].duration if hits else 600.0)
+    screener = Screener(cfg, Path(args.work), _models(args, cfg), lambda fps: MediaPipeFaces(None, fps), args.cookies)
+    res = screener.screen(vid, duration)
+    print(json.dumps({"video": vid, "duration": duration, **res.to_dict()}, ensure_ascii=False, indent=2))
+    return 0 if res.ok else 1
+
+
+def _cmd_identify(args) -> int:
+    from pvdata.identity import SFaceEmbedder, identify
+
+    cfg = Config.load(args.config)
+    summary = identify(args.out, SFaceEmbedder(cfg.identity.frames_per_clip), cfg.identity.same_person,
+                       quarantine=args.quarantine)  # fmt: skip
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def _cmd_find(args) -> int:
     from pvdata.find import find_sources
 
@@ -64,13 +124,17 @@ def _cmd_validate(args) -> int:
 
 
 def _cmd_split(args) -> int:
-    from pvdata.export import materialise_splits, speaker_splits, write_json
+    from pvdata.export import grouped_splits, materialise_splits, write_json
+    from pvdata.identity import load_persons
 
     cfg = Config.load(args.config)
     out = Path(args.out)
     speakers = sorted(p.name for p in (out / "raw_videos").iterdir() if p.is_dir())
     clips = {spk: len(list((out / "raw_videos" / spk).glob("*.mp4"))) for spk in speakers}
-    splits = speaker_splits(speakers, cfg.val_frac, cfg.test_frac, cfg.seed, clips)
+    persons = load_persons(out)
+    if persons:
+        print(f"using identity/persons.json: {len(persons)} persons over {len(speakers)} speaker folders")
+    splits = grouped_splits(speakers, clips, persons, cfg.val_frac, cfg.test_frac, cfg.seed)
     write_json(out / "splits.json", splits)
     counts = materialise_splits(out, splits, link=not args.copy)
     print(json.dumps({"speakers": splits, "clips": counts}, ensure_ascii=False, indent=2))
@@ -111,6 +175,32 @@ def main(argv=None) -> int:
         help="candidates checked in parallel (default: number of CPU cores, at most 8)",
     )
     r.set_defaults(fn=_cmd_run)
+
+    au = sub.add_parser("auto", help="discover, screen and mine YouTube videos until --target-hours is reached")
+    au.add_argument("--seeds", required=True, help="CSV with a 'query' column (see sources/seeds.csv)")
+    au.add_argument("--out", required=True)
+    au.add_argument("--work", help="cache folder (default: <out>/work)")
+    au.add_argument("--target-hours", type=float, help="stop at this many accepted hours (default: config, 100)")
+    au.add_argument("--max-videos", type=int, help="stop after mining this many videos (for a test)")
+    au.add_argument("--keep-downloads", action="store_true", help="keep full videos after mining (needs disk)")
+    au.add_argument("--asr-model")
+    au.add_argument("--face-model")
+    au.add_argument("--cookies")
+    au.add_argument("--workers", type=int, default=0)
+    au.set_defaults(fn=_cmd_auto)
+
+    sc = sub.add_parser("screen", help="screen one YouTube video (face + Hindi checks on 3 short samples)")
+    sc.add_argument("video", help="YouTube URL or video id")
+    sc.add_argument("--duration", type=float, help="video length in seconds (looked up if omitted)")
+    sc.add_argument("--work", default="screen_test")
+    sc.add_argument("--asr-model")
+    sc.add_argument("--cookies")
+    sc.set_defaults(fn=_cmd_screen)
+
+    idf = sub.add_parser("identify", help="face embeddings -> persons.json (merge speakers, flag other faces)")
+    idf.add_argument("--out", required=True)
+    idf.add_argument("--quarantine", action="store_true", help="move clips of other faces to <out>/quarantine/")
+    idf.set_defaults(fn=_cmd_identify)
 
     f = sub.add_parser("find", help="build a sources CSV from YouTube searches (speaker,query per row)")
     f.add_argument("--queries", required=True, help="CSV with columns speaker,query")

@@ -117,7 +117,12 @@ dataset/
 | Segmentation, text rules, Hindi number words, CTC check | ✅ tested |
 | Face checks (MediaPipe) and sync check | ✅ tested (face check also on a real photo) |
 | Export, manifest, report, validate, speaker-disjoint split | ✅ tested |
-| 27 automated tests, GitHub CI | ✅ |
+| First real run (college PC, RTX A5000): 39 videos → 2,576 clips, 1.41 h, 15 speakers | ✅ done |
+| Speed-ups: parallel checks, early face rejection, 720p decoding and download, background download | ✅ |
+| **Autopilot** `pvdata auto`: discover → screen (3 × 20 s samples) → mine → expand good channels, per-channel caps | ✅ coded, tested offline |
+| **Identity** `pvdata identify`: face embeddings merge one person's videos, quarantine guests; person-safe split | ✅ coded, tested offline |
+| CTC-aware clip boundaries (a fast speaker loses one word, not the clip) | ✅ |
+| 42 automated tests, GitHub CI | ✅ |
 
 **Honest limit:** the tests use a synthetic video and a fake speech recogniser, because YouTube isn't reachable from the build environment. **The first real run is the real test.** Expect to tune thresholds after it.
 
@@ -152,7 +157,7 @@ flowchart LR
 **1. Install** (once):
 ```bash
 cd ~/punarvaani-data && source .venv/bin/activate
-pytest -q                     # 32 passed
+pytest -q                     # 42 passed
 ```
 
 **2. Find videos:**
@@ -211,11 +216,12 @@ Then hand-check about 100 random clips: is the transcript right, are the lips vi
 |---|---|---|
 | **SyncNet** instead of the light sync check | More precise rejection of off-sync clips | Medium |
 | **Two-ASR agreement** (Whisper + IndicWhisper must agree) | Fewer wrong transcripts, and a measurable label-quality score | Medium |
-| **Face tracking + identity check** within a video (face embeddings) | Catches a second person appearing in "single speaker" videos | Medium |
+| ~~Face identity check~~ | Done: `pvdata identify` | ✅ |
 | **Shot-cut detection** | Drops clips that cross a camera cut | Small |
 | **Hinglish → Devanagari transliteration** (AI4Bharat IndicXlit) | Keeps clips with English loanwords instead of dropping them | Small |
 | **Export mouth crops directly** (skip the second cropping pass) | Faster handover, one source of truth | Small |
-| **Parallel processing** (several videos at once) | Faster full runs | Small |
+| ~~Parallel processing~~ | Done: parallel checks + background download | ✅ |
+| **Several PCs at once** (different seed lists, merge afterwards) | 100 h in days instead of a week | Medium |
 | **Volunteer recording tool** (spoken + silent takes, consent) | The silent-speech subset, our most unique data | Medium |
 | **Datasheet generator** from manifest + report | Paper-ready statistics in one command | Small |
 

@@ -13,6 +13,19 @@ import numpy as np
 SAMPLE_RATE = 16000
 
 
+class ToolError(RuntimeError):
+    """An external program (yt-dlp, ffmpeg, ffprobe) failed; the message ends with its last stderr lines."""
+
+
+def _run(cmd: list[str], text: bool = False) -> subprocess.CompletedProcess:
+    res = subprocess.run(cmd, capture_output=True, text=text)
+    if res.returncode != 0:
+        err = res.stderr if text else res.stderr.decode("utf-8", "replace")
+        tail = " | ".join(line.strip() for line in err.strip().splitlines()[-3:])
+        raise ToolError(f"{Path(cmd[0]).stem} exited with {res.returncode}: {tail[:500]}")
+    return res
+
+
 def _require(binary: str) -> str:
     path = shutil.which(binary)
     if path is None:
@@ -20,8 +33,10 @@ def _require(binary: str) -> str:
     return path
 
 
-def download(url: str, out_dir: str | Path, min_height: int = 720, cookies: str | None = None) -> Path:
-    """Download one video as mp4 (best stream of at least ``min_height`` if available)."""
+def download(url: str, out_dir: str | Path, min_height: int = 720, cookies: str | None = None,
+             prefer_height: int | None = 720) -> Path:  # fmt: skip
+    """Download one video as mp4: a stream of at least ``min_height``, preferring ``prefer_height`` (clips are
+    written at 720p, so a 1080p download only costs bandwidth)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     template = str(out_dir / "%(id)s.%(ext)s")
@@ -30,10 +45,39 @@ def download(url: str, out_dir: str | Path, min_height: int = 720, cookies: str 
     )
     cmd = [_require("yt-dlp"), "-f", fmt, "--merge-output-format", "mp4", "--no-playlist", "--write-info-json", "-o", template,
            "--print", "after_move:filepath", url]  # fmt: skip
+    if prefer_height:
+        cmd[1:1] = ["-S", f"res:{prefer_height}"]
     if cookies:
         cmd[1:1] = ["--cookies", cookies]
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.strip().splitlines()
+    out = _run(cmd, text=True).stdout.strip().splitlines()
     return Path(out[-1])
+
+
+def video_duration(url: str, cookies: str | None = None) -> float:
+    """Length in seconds from YouTube metadata (nothing is downloaded); 0 if unknown."""
+    cmd = [_require("yt-dlp"), "--skip-download", "--no-warnings", "--no-playlist", "--print", "%(duration)s", url]
+    if cookies:
+        cmd[1:1] = ["--cookies", cookies]
+    try:
+        return float(_run(cmd, text=True).stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def download_sections(url: str, out_dir: str | Path, sections: list[tuple[float, float]], max_height: int = 360,
+                      cookies: str | None = None) -> list[Path]:  # fmt: skip
+    """Download only short pieces of a video (low resolution, with audio): cheap samples for screening."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fmt = f"bv*[height<={max_height}]+ba/b[height<={max_height}]/wv*+ba/w"
+    cmd = [_require("yt-dlp"), "-f", fmt, "-S", f"res:{max_height}", "--merge-output-format", "mp4", "--no-playlist",
+           "-o", str(out_dir / "%(id)s.%(section_start)d.%(ext)s"), "--print", "after_move:filepath"]  # fmt: skip
+    for a, b in sections:
+        cmd += ["--download-sections", f"*{a:.0f}-{b:.0f}"]
+    if cookies:
+        cmd[1:1] = ["--cookies", cookies]
+    out = _run(cmd + [url], text=True).stdout.strip().splitlines()
+    return [Path(line) for line in out if line.strip() and Path(line.strip()).exists()]
 
 
 def read_info(video_path: str | Path) -> dict:
@@ -49,7 +93,7 @@ def read_info(video_path: str | Path) -> dict:
 def _probe(path: str, mtime: float) -> dict:
     cmd = [_require("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries",
            "stream=width,height,r_frame_rate:format=duration", "-of", "json", str(path)]  # fmt: skip
-    info = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
+    info = json.loads(_run(cmd, text=True).stdout)
     stream = info["streams"][0]
     num, den = stream["r_frame_rate"].split("/")
     return {
@@ -74,7 +118,7 @@ def extract_audio(video: str | Path, wav: str | Path, start: float | None = None
     if end is not None:
         cmd += ["-t", f"{end - (start or 0.0):.3f}"]
     cmd += ["-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), str(wav)]
-    subprocess.run(cmd, check=True)
+    _run(cmd)
     return Path(wav)
 
 
@@ -99,7 +143,7 @@ def cut_clip(video: str | Path, out: str | Path, start: float, end: float, heigh
            "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]  # fmt: skip
     cmd += ["-c:a", "aac", "-ar", str(SAMPLE_RATE), "-ac", "1"] if keep_audio else ["-an"]
     cmd += ["-movflags", "+faststart", str(out)]
-    subprocess.run(cmd, check=True)
+    _run(cmd)
     return out
 
 
@@ -119,6 +163,6 @@ def read_frames(video: str | Path, start: float = 0.0, end: float | None = None,
     if end is not None:
         cmd += ["-t", f"{end - start:.3f}"]
     cmd += ["-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
-    raw = subprocess.run(cmd, check=True, capture_output=True).stdout
+    raw = _run(cmd).stdout
     frames = np.frombuffer(raw, dtype=np.uint8)
     return frames.reshape(-1, h, w, 3)
