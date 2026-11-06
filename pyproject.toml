@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Downloading from YouTube (also needs the ffmpeg binary on PATH)
-download = ["yt-dlp>=2024.8.6"]
+download = ["yt-dlp[default]>=2025.11.12", "deno"]  # deno: JS runtime YouTube downloads now need
 # Speech recognition with word timestamps (pick one backend; faster-whisper is the default)
 asr = ["faster-whisper>=1.0"]
 whisperx = ["whisperx>=3.1"]
