@@ -92,6 +92,7 @@ class AutoConfig:
     expand_after_videos: int = 2  # list a channel's other uploads once this many of its videos were mined ...
     expand_min_minutes_per_video: float = 1.0  # ... and they gave at least this many accepted minutes each
     channel_list_size: int = 60
+    ok_buffer: int = 6  # screen new videos only while fewer than this many screened videos wait to be mined
     keep_downloads: bool = False  # delete the full video and audio once a source is mined (disk!)
     exclude_title_regex: str = (
         r"(?i)debate|panel|compilation|#shorts|\bshorts\b|jukebox|trailer|song|lyrics|gaana|reaction|"

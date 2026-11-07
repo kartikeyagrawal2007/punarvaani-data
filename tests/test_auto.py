@@ -198,3 +198,24 @@ def test_release_deletes_full_download_but_keeps_asr(tmp_path):
     assert not (tmp_path / "work" / "downloads" / f"{src.source_id}.mp4").exists()
     assert not (tmp_path / "work" / "audio" / f"{src.source_id}.wav").exists()
     assert (tmp_path / "work" / "asr" / f"{src.source_id}.json").exists()
+
+
+def test_screening_waits_while_enough_videos_are_ready_to_mine(tmp_path):
+    from tests.test_pipeline_e2e import BrightnessFace, FakeASR, make_video
+
+    base = make_video(tmp_path / "base.mp4")
+
+    def mk(v):
+        f = tmp_path / f"{v['id']}.mp4"
+        if not f.exists():
+            shutil.copy(base, f)
+        return Source(str(f), v["id"])
+
+    hits = [Hit(f"v{i:02d}", 600, f"Talk {i}", f"Chan {i}", f"UC{i}") for i in range(40)]
+    cfg = Config()
+    pipe = Pipeline(cfg, tmp_path / "out", tmp_path / "work", FakeASR(["नमस्ते भारत आज मौसम"]), BrightnessFace)
+    screener = FakeScreener()
+    pilot = AutoPilot(cfg, tmp_path / "out", ["q"], pipe, screener, lambda q, n: hits, lambda c, n: [], mk)
+    pilot.run(target_hours=10, max_videos=3)
+    # samples arrive instantly here; before the fix every one of the 40 videos was screened before mining
+    assert len(screener.seen) <= 3 + cfg.auto.ok_buffer + 3

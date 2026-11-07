@@ -159,7 +159,13 @@ class AutoPilot:
         return found
 
     # --------------------------------------------------------------- screen
+    def need_screening(self) -> bool:
+        """Screening is only worth its downloads while the queue of videos ready to mine is short."""
+        return self.state.count("ok") < self.cfg.auto.ok_buffer
+
     def queue_samples(self, ahead: int = 3) -> None:
+        if not self.need_screening():
+            return
         new = [v for v in self.state.videos.values() if v["status"] == "new" and v["id"] not in self.samples]
         new.sort(key=lambda v: -self.channel_yield(v.get("channel_id", "")))  # proven channels first
         for v in new[: max(0, ahead - len(self.samples))]:
@@ -251,13 +257,16 @@ class AutoPilot:
                     log.info("auto: nothing left to try; add seed queries to find more")
                     break
             self.queue_samples()
-            while self.screen_one(block=False):  # score whatever has arrived
+            for _ in range(3):  # score samples that have arrived, but never starve mining
+                if not self.need_screening() or not self.screen_one(block=False):
+                    break
                 self.queue_samples()
+            t1 = time.time()
             if self.mine_one():
                 mined += 1
                 hours = self._hours
-                log.info("auto: %.2f / %.0f h after %d videos this session (%.0f min)", hours, target, mined,
-                         (time.time() - t0) / 60)  # fmt: skip
+                log.info("auto: %.2f / %.0f h after %d videos this session (%.0f min; this video %.1f min)", hours,
+                         target, mined, (time.time() - t0) / 60, (time.time() - t1) / 60)  # fmt: skip
             elif not self.screen_one(block=True) and self.state.count("new") == 0:
                 if self.discover() == 0:
                     log.info("auto: nothing left to try; add seed queries to find more")

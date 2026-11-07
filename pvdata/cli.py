@@ -226,7 +226,8 @@ def main(argv=None) -> int:
     p.set_defaults(fn=_cmd_report)
 
     args = ap.parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        datefmt="%H:%M:%S")  # fmt: skip
     return args.fn(args)
 
 
