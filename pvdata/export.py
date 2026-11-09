@@ -104,27 +104,37 @@ def speaker_splits(speakers: list[str], val_frac: float, test_frac: float, seed:
                    clips: dict[str, int] | None = None) -> dict[str, list[str]]:  # fmt: skip
     """Speaker-disjoint split: every speaker's clips go to exactly one of train / val / test.
 
-    The fractions set how many *speakers* go to val and test (at least one each). With ``clips`` (clips per
-    speaker), val/test speakers are drawn only from mid-sized ones (2-15% of all clips) when there are enough:
-    a speaker with half the data never becomes the test set, and a 4-clip speaker never becomes a useless one.
+    Without ``clips`` the fractions count speakers. With ``clips`` (clips per speaker) they count clips:
+    speakers are added to test, then val, in a seeded random order (mid-sized ones, 2-15% of all clips, first)
+    until the split holds its share of the clips, with at least one speaker each and at most twice the
+    speaker quota, so a speaker with half the data never becomes the test set and train keeps most people.
     """
     s = sorted(set(speakers))
     random.Random(seed).shuffle(s)
     n = len(s)
     n_test = max(1, round(n * test_frac)) if n >= 3 and test_frac > 0 else 0
     n_val = max(1, round(n * val_frac)) if n >= 2 and val_frac > 0 else 0
-    if clips:
-        total = sum(clips.get(x, 0) for x in s) or 1
-        share = {x: clips.get(x, 0) / total for x in s}
-        mid = [x for x in s if 0.02 <= share[x] <= 0.15]
-        not_big = [x for x in s if share[x] <= 0.15 and x not in mid]
-        rest = [x for x in s if x not in mid and x not in not_big]
-        s = mid + sorted(not_big, key=lambda x: -share[x]) + rest  # preferred val/test speakers first
-    return {
-        "test": sorted(s[:n_test]),
-        "val": sorted(s[n_test : n_test + n_val]),
-        "train": sorted(s[n_test + n_val :]),
-    }
+    if not clips:
+        return {
+            "test": sorted(s[:n_test]),
+            "val": sorted(s[n_test : n_test + n_val]),
+            "train": sorted(s[n_test + n_val :]),
+        }
+    total = sum(clips.get(x, 0) for x in s) or 1
+    share = {x: clips.get(x, 0) / total for x in s}
+    mid = [x for x in s if 0.02 <= share[x] <= 0.15]
+    small = sorted((x for x in s if share[x] < 0.02), key=lambda x: -share[x])
+    order = mid + small  # speakers above 15% of the clips always stay in train
+    out: dict[str, list[str]] = {"test": [], "val": [], "train": []}
+    for split, frac, quota in (("test", test_frac, n_test), ("val", val_frac, n_val)):
+        got = 0.0
+        while order and quota and len(out[split]) < 2 * quota and (not out[split] or got < frac):
+            x = order.pop(0)
+            out[split].append(x)
+            got += share[x]
+    taken = set(out["test"]) | set(out["val"])
+    out["train"] = [x for x in s if x not in taken]
+    return {k: sorted(v) for k, v in out.items()}
 
 
 def grouped_splits(folders: list[str], clips: dict[str, int], groups: dict[str, list[str]] | None, val_frac: float,

@@ -219,3 +219,17 @@ def test_screening_waits_while_enough_videos_are_ready_to_mine(tmp_path):
     pilot.run(target_hours=10, max_videos=3)
     # samples arrive instantly here; before the fix every one of the 40 videos was screened before mining
     assert len(screener.seen) <= 3 + cfg.auto.ok_buffer + 3
+
+
+def test_split_holds_about_ten_percent_of_clips_with_many_people():
+    from pvdata.export import speaker_splits
+
+    rng = np.random.default_rng(3)
+    clips = {f"p{i:02d}": int(c) for i, c in enumerate(rng.integers(5, 200, size=60))}  # 60 people, like handover_v2
+    total = sum(clips.values())
+    for seed in range(10):
+        s = speaker_splits(list(clips), 0.1, 0.1, seed, clips)
+        for split in ("val", "test"):
+            frac = sum(clips[x] for x in s[split]) / total
+            assert 0.08 <= frac <= 0.16, (seed, split, frac)
+        assert sum(clips[x] for x in s["train"]) / total >= 0.7
