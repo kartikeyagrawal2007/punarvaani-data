@@ -3,6 +3,7 @@
 pvdata run      --sources sources/my_sources.csv --out dataset/      # mine clips
 pvdata auto     --seeds sources/seeds.csv --out dataset/           # find + screen + mine until --target-hours
 pvdata screen   https://www.youtube.com/watch?v=XXXX                 # would auto accept this video? (dry run)
+pvdata snapshot --out dataset/ --to handover/ --hours 2              # balanced copy of finished clips
 pvdata identify --out dataset/                                       # face ids: merge persons, flag guests
 pvdata validate dataset/raw_videos                                   # check the TEAM_GUIDE rules
 pvdata split    --out dataset/                                       # speaker-disjoint train/val/test
@@ -141,6 +142,16 @@ def _cmd_split(args) -> int:
     return 0
 
 
+def _cmd_snapshot(args) -> int:
+    from pvdata.snapshot import snapshot
+
+    summary = snapshot(args.out, args.to, args.hours, seed=args.seed, exclude=args.exclude)
+    print(json.dumps(summary, indent=2))
+    print(f"next: pvdata identify --out {args.to} --quarantine; pvdata split --out {args.to}; "
+          f"pvdata validate {Path(args.to) / 'raw_videos'}")  # fmt: skip
+    return 0
+
+
 def _cmd_report(args) -> int:
     from pvdata.export import Manifest, build_report, write_json
 
@@ -220,6 +231,14 @@ def main(argv=None) -> int:
     s.add_argument("--out", required=True)
     s.add_argument("--copy", action="store_true", help="copy folders instead of symlinking")
     s.set_defaults(fn=_cmd_split)
+
+    sn = sub.add_parser("snapshot", help="copy a balanced N-hour subset of finished clips (safe while mining runs)")
+    sn.add_argument("--out", required=True, help="the dataset folder to copy from (read only)")
+    sn.add_argument("--to", required=True, help="new folder for the snapshot")
+    sn.add_argument("--hours", type=float, default=2.0)
+    sn.add_argument("--exclude", help="an earlier snapshot (folder or manifest.csv) whose clips to leave out")
+    sn.add_argument("--seed", type=int, default=0)
+    sn.set_defaults(fn=_cmd_snapshot)
 
     p = sub.add_parser("report", help="recompute report.json from manifest.csv")
     p.add_argument("--out", required=True)
