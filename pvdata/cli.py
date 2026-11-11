@@ -152,6 +152,22 @@ def _cmd_snapshot(args) -> int:
     return 0
 
 
+def _cmd_review(args) -> int:
+    from pvdata.review import make_review
+
+    path = make_review(args.out, refresh=args.refresh)
+    print(f"open {path.resolve()} in a browser, tick the bad folders, then run the command it shows")
+    return 0
+
+
+def _cmd_exclude(args) -> int:
+    from pvdata.review import exclude
+
+    print(json.dumps(exclude(args.out, args.speakers), indent=2))
+    print("done. Restart `pvdata auto` if you stopped it; blocked channels won't be mined again.")
+    return 0
+
+
 def _cmd_report(args) -> int:
     from pvdata.export import Manifest, build_report, write_json
 
@@ -239,6 +255,18 @@ def main(argv=None) -> int:
     sn.add_argument("--exclude", help="an earlier snapshot (folder or manifest.csv) whose clips to leave out")
     sn.add_argument("--seed", type=int, default=0)
     sn.set_defaults(fn=_cmd_snapshot)
+
+    rv = sub.add_parser("review", help="one thumbnail strip per speaker folder in an HTML page, to spot bad videos")
+    rv.add_argument("--out", required=True)
+    rv.add_argument("--refresh", action="store_true", help="redraw thumbnails that already exist")
+    rv.set_defaults(fn=_cmd_review)
+
+    ex = sub.add_parser(
+        "exclude", help="remove speaker folders (e.g. animation) and block their channels; stop auto first"
+    )
+    ex.add_argument("--out", required=True)
+    ex.add_argument("speakers", nargs="+", help="speaker folders, e.g. spk385 spk402")
+    ex.set_defaults(fn=_cmd_exclude)
 
     p = sub.add_parser("report", help="recompute report.json from manifest.csv")
     p.add_argument("--out", required=True)

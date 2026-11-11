@@ -133,6 +133,16 @@ def read_wav(path: str | Path) -> np.ndarray:
     return data.astype(np.float32) / 32768.0
 
 
+def smooth_fps(source_fps: float) -> int:
+    """An output frame rate that needs no uneven frame dropping: 24-30 fps stays as it is, 48-60 fps is halved.
+    (30 -> 25 would drop every 6th frame, which looks like stutter and jumbles lip motion.)"""
+    if 23 <= source_fps <= 31:
+        return round(source_fps)
+    if 46 <= source_fps <= 62:
+        return round(source_fps / 2)
+    return 25
+
+
 def cut_clip(video: str | Path, out: str | Path, start: float, end: float, height: int = 720, fps: int = 25,
              keep_audio: bool = True) -> Path:  # fmt: skip
     """Re-encode [start, end] as H.264 mp4 at ``fps`` and ``height`` (frame-accurate, even dimensions)."""

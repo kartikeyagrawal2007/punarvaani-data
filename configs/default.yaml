@@ -1,13 +1,14 @@
 # Default thresholds for the Punarvaani data engine. Copy this file and pass --config to change them.
-# Clip rules follow TEAM_GUIDE.md (main repo): 1.5-2.5 s, Devanagari only, Stage-1 CTC limit U+R <= 32.
+# Clip rules follow the as-built trainer (docs/ARCHITECTURE.md, main repo): all frames read, 1.5-3 s clips,
+# Devanagari only, CTC limit U+R <= ceil(frames/2)*4 per clip.
 clip:
   min_s: 1.5
-  max_s: 2.5
+  max_s: 3.0
   min_words: 2
-  max_words: 6
+  max_words: 10
   pad_s: 0.08
   max_gap_s: 0.35
-  ctc_steps: 32
+  ctc_steps: 0                 # 0 = per clip like the trainer; 32 = old fixed 16-frame rule
   fps: 25
 text:
   spell_out_numbers: true
@@ -29,7 +30,7 @@ sync:
 video:
   min_height: 720
   out_height: 720
-  out_fps: 25
+  out_fps: 0                   # 0 = keep 24-30 fps sources, halve 48-60 (no stutter)
   keep_audio: true
 asr:
   backend: faster-whisper

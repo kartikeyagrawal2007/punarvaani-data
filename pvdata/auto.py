@@ -100,6 +100,8 @@ class AutoPilot:
     def channel_done(self, cid: str) -> bool:
         """The channel has reached its cap of mined videos or accepted hours."""
         a, c = self.cfg.auto, self.state.channel(cid)
+        if c.get("blocked"):  # set by `pvdata exclude` (e.g. an animation channel)
+            return True
         return c["mined"] >= a.max_videos_per_channel or c["accepted_s"] >= a.max_hours_per_channel * 3600
 
     def channel_full(self, cid: str) -> bool:
@@ -170,7 +172,8 @@ class AutoPilot:
         new.sort(key=lambda v: -self.channel_yield(v.get("channel_id", "")))  # proven channels first
         for v in new[: max(0, ahead - len(self.samples))]:
             if self.channel_full(v.get("channel_id", "")):
-                v["status"], v["reason"] = "rejected", "channel_cap"
+                blocked = self.state.channel(v.get("channel_id", "")).get("blocked")
+                v["status"], v["reason"] = "rejected", "channel_blocked" if blocked else "channel_cap"
                 continue
             self.samples[v["id"]] = self.io.submit(self._fetch_samples, v)
 
@@ -221,7 +224,8 @@ class AutoPilot:
         todo = []
         for v in self.next_to_mine():
             if self.channel_done(v.get("channel_id", "")):
-                v.update(status="rejected", reason="channel_cap")
+                blocked = self.state.channel(v.get("channel_id", "")).get("blocked")
+                v.update(status="rejected", reason="channel_blocked" if blocked else "channel_cap")
             else:
                 todo.append(v)
         if not todo:

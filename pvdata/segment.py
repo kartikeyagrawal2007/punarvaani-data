@@ -7,7 +7,7 @@ Each clip is a run of consecutive words that:
 - never shares a word with another clip.
 
 The greedy scan prefers the longest valid run starting at each position, then jumps past it. If ``accept``
-is given (e.g. "the normalised text fits the CTC limit"), it takes the longest run that ``accept`` passes
+is given (e.g. "the normalised text fits the CTC limit for this clip length"), it takes the longest run that ``accept`` passes
 instead, so a fast speaker or a trailing English word costs one word rather than the whole clip. If no run
 passes, the longest one is still returned, and the checks reject it with the reason.
 """
@@ -41,7 +41,7 @@ class Candidate:
 
 
 def segment_words(words: list[Word], cfg: ClipConfig, total_duration: float | None = None,
-                  accept: Callable[[str], bool] | None = None) -> list[Candidate]:  # fmt: skip
+                  accept: Callable[[Candidate], bool] | None = None) -> list[Candidate]:  # fmt: skip
     words = sorted((w for w in words if w.end > w.start), key=lambda w: w.start)
     out: list[Candidate] = []
     i = 0
@@ -62,7 +62,7 @@ def segment_words(words: list[Word], cfg: ClipConfig, total_duration: float | No
                 valid.append(Candidate(start, end, words[i : j + 1]))
         best = valid[-1] if valid else None
         if accept is not None and len(valid) > 1:
-            best = next((c for c in reversed(valid) if accept(c.text)), best)
+            best = next((c for c in reversed(valid) if accept(c)), best)
         if best is not None:
             # don't let padding overlap the previous clip
             if out and best.start < out[-1].end:

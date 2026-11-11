@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pvdata import media
 from pvdata.config import Config
-from pvdata.ctc import fits_ctc
+from pvdata.ctc import ctc_steps_for, fits_ctc
 from pvdata.export import CLIP_NAME
 
 ALLOWED = re.compile(r"^[ऀ-ॿ ]+$")
@@ -64,23 +64,31 @@ def validate(raw_videos: str | Path, cfg: Config | None = None, check_media: boo
                 continue
             if not text or not ALLOWED.match(text.replace("।", "")):
                 rep.errors.append(f"{where}: transcript must be Devanagari, spaces and । only")
-            ok, need = fits_ctc(text, cfg.clip.ctc_steps)
-            if not ok:
-                rep.errors.append(f"{where}: needs {need} CTC steps > {cfg.clip.ctc_steps} (clip too long for Stage 1)")
+            info = None
             if check_media:
                 try:
                     info = media.probe(mp4)
                 except Exception as e:
                     rep.errors.append(f"{where}: unreadable video ({type(e).__name__})")
                     continue
+            if cfg.clip.ctc_steps > 0:
+                steps = cfg.clip.ctc_steps
+            elif info is not None:
+                steps = ctc_steps_for(info["duration"], info["fps"] or 25)
+            else:  # no media check: assume the shortest allowed clip at 25 fps (strictest)
+                steps = ctc_steps_for(cfg.clip.min_s, 25)
+            ok, need = fits_ctc(text, steps)
+            if not ok:
+                rep.errors.append(f"{where}: needs {need} CTC steps > {steps} (clip too long for Stage 1)")
+            if info is not None:
                 if not (cfg.clip.min_s - 0.15 <= info["duration"] <= cfg.clip.max_s + 0.15):
                     rep.warnings.append(
                         f"{where}: duration {info['duration']:.2f}s outside {cfg.clip.min_s}-{cfg.clip.max_s}s"
                     )
                 if info["height"] < cfg.video.min_height:
                     rep.warnings.append(f"{where}: {info['height']}p is below {cfg.video.min_height}p")
-                if info["fps"] < 24.5:
-                    rep.warnings.append(f"{where}: {info['fps']:.1f} fps (need 25 or 30)")
+                if info["fps"] < 23.5:
+                    rep.warnings.append(f"{where}: {info['fps']:.1f} fps (need 24-30)")
     rep.by_speaker = dict(sorted(per_spk.items()))
     rep.speakers = len(per_spk)
     if rep.clips == 0:

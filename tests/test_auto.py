@@ -35,10 +35,10 @@ def test_segment_takes_longest_run_that_passes_accept():
     words = words_every("एक दो तीन चार पाँच")  # 5 words in ~2.0 s: one candidate of all five by default
     cfg = ClipConfig()
     assert len(segment_words(words, cfg)[0].words) == 5
-    shorter = segment_words(words, cfg, accept=lambda text: len(text.split()) <= 4)
+    shorter = segment_words(words, cfg, accept=lambda c: len(c.words) <= 4)
     assert [len(c.words) for c in shorter][0] == 4
     # nothing passes -> the longest run is still produced, so the checks can log why it failed
-    assert len(segment_words(words, cfg, accept=lambda text: False)[0].words) == 5
+    assert len(segment_words(words, cfg, accept=lambda c: False)[0].words) == 5
 
 
 # ------------------------------------------------------------------ ids

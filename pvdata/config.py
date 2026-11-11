@@ -10,14 +10,14 @@ import yaml
 
 @dataclass
 class ClipConfig:
-    # TEAM_GUIDE: 1.5-2.5 s per clip (about 2-6 words), so Stage 1's 16 frames -> 32 CTC steps can align.
+    # The trainer reads every frame (up to --max_frames 96, i.e. 3.2 s at 30 fps), so clips may be 1.5-3 s.
     min_s: float = 1.5
-    max_s: float = 2.5
+    max_s: float = 3.0
     min_words: int = 2
-    max_words: int = 6
+    max_words: int = 10
     pad_s: float = 0.08  # context kept before the first and after the last word
     max_gap_s: float = 0.35  # a pause longer than this ends a clip (don't glue sentences together)
-    ctc_steps: int = 32  # T_ctc of the Stage-1 model; a clip needs U + R <= this
+    ctc_steps: int = 0  # 0 = per clip like the trainer: ceil(frames / 2) * 4; a fixed number = old 16-frame rule (32)
     fps: int = 25
 
 
@@ -51,7 +51,7 @@ class SyncConfig:
 class VideoConfig:
     min_height: int = 720  # TEAM_GUIDE: at least 720p
     out_height: int = 720
-    out_fps: int = 25
+    out_fps: int = 0  # 0 = smooth: keep the source rate (24-30 fps), halve 48-60 fps; forcing 25 makes 30 fps stutter
     keep_audio: bool = True  # Stage 1 ignores audio; keeping it lets us re-check sync later
 
 
@@ -96,7 +96,8 @@ class AutoConfig:
     keep_downloads: bool = False  # delete the full video and audio once a source is mined (disk!)
     exclude_title_regex: str = (
         r"(?i)debate|panel|compilation|#shorts|\bshorts\b|jukebox|trailer|song|lyrics|gaana|reaction|"
-        r"live stream|बहस|डिबेट|गाना|गीत|भजन|मुकाबला|दंगल"
+        r"live stream|animation|animated|cartoon|avatar|\b3d\b|बहस|डिबेट|गाना|गीत|भजन|मुकाबला|दंगल|कार्टून|"
+        r"एनिमेशन|एनीमेशन"
     )
 
 

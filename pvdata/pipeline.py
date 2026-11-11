@@ -27,7 +27,7 @@ import numpy as np
 from pvdata import media
 from pvdata.asr import Transcriber, Word
 from pvdata.config import Config
-from pvdata.ctc import fits_ctc
+from pvdata.ctc import ctc_steps_for, fits_ctc
 from pvdata.export import Manifest, build_report, clip_paths, is_youtube, next_index, write_json, write_transcript
 from pvdata.face import FaceObs, check_clip, scan_frames
 from pvdata.segment import Candidate, segment_words
@@ -54,6 +54,7 @@ class Pipeline:
         self.transcriber, self.face_factory, self.cookies = transcriber, face_factory, cookies
         self.workers = workers if workers > 0 else min(8, os.cpu_count() or 2)
         self.keep_downloads = keep_downloads
+        self.out_fps = cfg.video.out_fps or 25  # set per source in run_source
         self._downloader = ThreadPoolExecutor(1)  # fetches the next video while the current one is processed
         self._pending: dict[str, Future] = {}
         for d in ("downloads", "audio", "asr", "done"):
@@ -93,11 +94,16 @@ class Pipeline:
         for p in (self.work / "downloads" / f"{src.source_id}.mp4", self.work / "audio" / f"{src.source_id}.wav"):
             p.unlink(missing_ok=True)
 
-    def accept_text(self, text: str) -> bool:
+    def ctc_steps(self, duration_s: float) -> int:
+        """CTC steps Stage 1 will have for a clip of this length at the output frame rate."""
+        c = self.cfg.clip
+        return c.ctc_steps if c.ctc_steps > 0 else ctc_steps_for(duration_s, self.out_fps)
+
+    def accept_text(self, cand: Candidate) -> bool:
         """Cheap pre-check used to choose clip boundaries: would this text pass the transcript and CTC rules?"""
         t = self.cfg.text
-        norm = normalize_transcript(text, t.spell_out_numbers, t.reject_latin)
-        return norm.ok and fits_ctc(norm.text, self.cfg.clip.ctc_steps)[0]
+        norm = normalize_transcript(cand.text, t.spell_out_numbers, t.reject_latin)
+        return norm.ok and fits_ctc(norm.text, self.ctc_steps(cand.duration))[0]
 
     def provenance(self, src: Source) -> dict:
         """Licence/channel/title/upload date for the manifest (needed for the dataset paper's datasheet)."""
@@ -131,7 +137,7 @@ class Pipeline:
         info = {"asr_min_prob": round(cand.min_prob, 3)}
         if cand.min_prob < c.text.min_asr_word_prob:
             return Decision("rejected", "low_asr_confidence", norm.text, info)
-        ok, need = fits_ctc(norm.text, c.clip.ctc_steps)
+        ok, need = fits_ctc(norm.text, self.ctc_steps(cand.duration))
         info["ctc_need"] = need
         if not ok:
             return Decision("rejected", "too_many_phonemes", norm.text, info)
@@ -181,6 +187,7 @@ class Pipeline:
         else:
             start = src.start or 0.0
             end = min(src.end, info["duration"]) if src.end else info["duration"]
+            self.out_fps = self.cfg.video.out_fps or media.smooth_fps(info["fps"])
             wav, words = self.transcribe(src, video, start, end)
             audio = media.read_wav(wav)
             cands = segment_words(words, self.cfg.clip, end - start, accept=self.accept_text)
@@ -205,7 +212,7 @@ class Pipeline:
         if d.status == "accepted":
             mp4, txt = clip_paths(self.out, spk, next_index(self.out, spk))
             v = self.cfg.video
-            media.cut_clip(video, mp4, start + cand.start, start + cand.end, v.out_height, v.out_fps, v.keep_audio)
+            media.cut_clip(video, mp4, start + cand.start, start + cand.end, v.out_height, self.out_fps, v.keep_audio)
             write_transcript(txt, d.text)
             row["clip_id"] = mp4.stem
             counts["accepted_s"] += cand.duration
