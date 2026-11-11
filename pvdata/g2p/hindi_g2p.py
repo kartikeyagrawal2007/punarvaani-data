@@ -1,4 +1,4 @@
-# Vendored from kartikeyagrawal2007/punarvaani (Data/hindi_g2p.py @ bca6d4b) so phoneme counts here match
+# Vendored from kartikeyagrawal2007/punarvaani (Data/hindi_g2p.py @ dac8f20) so phoneme counts here match
 # the Stage-1 trainer exactly. Do not edit here: update the main repo, then copy the file again.
 
 """
@@ -53,6 +53,8 @@ INDEPENDENT_VOWELS = {
     'ऐ': 'AI',
     'ओ': 'O',
     'औ': 'AU',
+    'ऑ': 'O',      # candra O (loanwords: डॉक्टर)
+    'ऍ': 'E',      # candra E
 }
 
 # Dependent Vowel Signs (Matras)
@@ -67,6 +69,8 @@ VOWEL_MATRAS = {
     'ै': 'AI',
     'ो': 'O',
     'ौ': 'AU',
+    'ॉ': 'O',      # candra O matra (loanwords: डॉक्टर)
+    'ॅ': 'E',      # candra E matra
 }
 
 # Consonants (each inherently contains schwa 'A' unless followed by halant or matra)
@@ -200,46 +204,46 @@ def word_to_syllables(word: str, transcript_id: str = None) -> List[dict]:
     return units
 
 
+def _is_vocalic(unit: dict) -> bool:
+    """True if a unit carries a vowel (independent, matra, inherent schwa or visarga)."""
+    return (
+        unit['type'] in ('vowel', 'visarga')
+        or unit.get('matra') is not None
+        or unit.get('has_schwa', False)
+    )
+
+
 def apply_schwa_deletion(units: List[dict]) -> List[str]:
     """
-    Applies standard Hindi Schwa Deletion (Choudhury & Rao rule):
-    1. Word-final schwa is deleted if vocalic_count >= 2 and not ending in conjunct.
-    2. Medial schwa in V-C-schwa-C-V context is deleted.
+    Hindi schwa deletion (Ohala 1983), applied on syllable units:
+
+    1. Word-final schwa is deleted when the word has at least two vocalic units.
+       A preceding conjunct does NOT block this: फ़िल्म -> F I L M, कर्म -> K A R M.
+    2. Right-to-left, a medial schwa is deleted in a V C _ C V context, where the
+       following consonant is vowel-bearing (matra, schwa, or an independent vowel).
+       Example: कमला -> K A M L AA, समझना -> S A M A JH N AA.
     """
     num_units = len(units)
     if num_units == 0:
         return []
 
-    # Count how many syllables/units have vowels or inherent schwas
-    vocalic_count = 0
-    for u in units:
-        if u['type'] == 'vowel' or u.get('matra') is not None or u.get('has_schwa', False):
-            vocalic_count += 1
+    vocalic_count = sum(1 for u in units if _is_vocalic(u))
 
-    # Rule 1: Final schwa deletion
-    # In spoken Hindi, word-final schwa is deleted for words with vocalic_count >= 2
-    # and when not preceded by a halant (conjunct coda)
+    # Rule 1: word-final schwa deletion.
     if vocalic_count >= 2 and num_units >= 2:
         last_unit = units[-1]
         if last_unit['type'] == 'consonant' and last_unit.get('has_schwa', False):
-            prev_has_halant = units[-2].get('has_halant', False) if num_units >= 2 else False
-            if not prev_has_halant:
-                last_unit['has_schwa'] = False
+            last_unit['has_schwa'] = False
 
-    # Rule 2: Medial schwa deletion
-    # For a pattern: Unit[i-1] is vocalic, Unit[i] has schwa, Unit[i+1] is followed by a vowel
-    if num_units >= 3:
-        for i in range(1, num_units - 1):
-            curr = units[i]
-            if curr['type'] == 'consonant' and curr.get('has_schwa', False):
-                prev_vocalic = (units[i - 1]['type'] == 'vowel' or 
-                                units[i - 1].get('matra') is not None or 
-                                units[i - 1].get('has_schwa', False))
-                next_vocalic = (units[i + 1]['type'] == 'vowel' or 
-                                units[i + 1].get('matra') is not None)
-
-                if prev_vocalic and next_vocalic and not units[i - 1].get('has_halant', False):
-                    curr['has_schwa'] = False
+    # Rule 2: medial schwa deletion, scanning right to left so cascades work.
+    for i in range(num_units - 2, 0, -1):
+        curr = units[i]
+        if curr['type'] != 'consonant' or not curr.get('has_schwa', False):
+            continue
+        if not _is_vocalic(units[i - 1]):
+            continue
+        if _is_vocalic(units[i + 1]):
+            curr['has_schwa'] = False
 
     # Convert units to phoneme list
     phonemes = []
@@ -292,10 +296,6 @@ def devanagari_to_phonemes(text: str, as_string: bool = False, transcript_id: st
             if all_phonemes:
                 all_phonemes.append('|')  # Word boundary delimiter
             all_phonemes.extend(word_phonemes)
-
-    if as_string:
-        return ' '.join(all_phonemes)
-    return all_phonemes
 
     if as_string:
         return ' '.join(all_phonemes)
