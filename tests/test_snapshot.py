@@ -64,3 +64,25 @@ def test_snapshot_is_balanced_finished_and_excludes_earlier(tmp_path):
     s2 = snapshot(src, tmp_path / "v2", hours=0.1, exclude=tmp_path / "v1")
     ids2 = {r["clip_id"] for r in Manifest(tmp_path / "v2" / "manifest.csv").rows()}
     assert ids2 and not ids & ids2 and s2["clips"] == len(ids2)
+
+
+def test_gold_snapshot_keeps_only_the_best_clips(tmp_path):
+    src = tmp_path / "dataset"
+    make_dataset(src, {"spk01": ("anchor_a", 20), "spk02": ("anchor_b", 20)})
+    rows = Manifest(src / "manifest.csv").rows()
+    for i, r in enumerate(rows):  # half the clips are borderline (weak sync), one is turned away
+        good = i % 2 == 0
+        r.update(face_ratio="1.0", yaw="-30" if i == 4 else "3", pitch="2", sync_corr="0.6" if good else "0.18",
+                 sync_offset="0", asr_min_prob="0.9", text="आज हम बात करेंगे")  # fmt: skip
+    import csv
+
+    with open(src / "manifest.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, MANIFEST_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    from pvdata.snapshot import GOLD
+
+    s = snapshot(src, tmp_path / "gold", hours=1.0, quality_min=GOLD, best_first=True)
+    kept = Manifest(tmp_path / "gold" / "manifest.csv").rows()
+    assert kept and all(float(r["sync_corr"]) >= 0.3 and abs(float(r["yaw"])) <= 15 for r in kept)
+    assert s["clips"] == len(kept) == 19  # 20 strong-sync clips minus the one turned away

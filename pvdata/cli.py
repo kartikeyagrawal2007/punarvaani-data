@@ -161,9 +161,12 @@ def _cmd_split(args) -> int:
 
 
 def _cmd_snapshot(args) -> int:
-    from pvdata.snapshot import snapshot
+    from pvdata.snapshot import GOLD, snapshot
 
-    summary = snapshot(args.out, args.to, args.hours, seed=args.seed, exclude=args.exclude)
+    summary = snapshot(args.out, args.to, args.hours, seed=args.seed, exclude=args.exclude,
+                       quality_min=GOLD if args.gold else None, best_first=args.gold)  # fmt: skip
+    if args.gold and summary["hours"] < args.hours * 0.9:
+        print(f"note: only {summary['eligible_hours']} h meet the gold thresholds (see GOLD in pvdata/snapshot.py)")
     print(json.dumps(summary, indent=2))
     print(f"next: pvdata identify --out {args.to} --quarantine; pvdata split --out {args.to}; "
           f"pvdata validate {Path(args.to) / 'raw_videos'}")  # fmt: skip
@@ -296,6 +299,9 @@ def main(argv=None) -> int:
     sn.add_argument("--hours", type=float, default=2.0)
     sn.add_argument("--exclude", help="an earlier snapshot (folder or manifest.csv) whose clips to leave out")
     sn.add_argument("--seed", type=int, default=0)
+    sn.add_argument("--gold", action="store_true",
+                    help="only the best-scored clips (face in 99%% of frames, frontal, strong lip-sync, confident ASR, "
+                         "3+ words), best first within each person")  # fmt: skip
     sn.set_defaults(fn=_cmd_snapshot)
 
     rv = sub.add_parser("review", help="one thumbnail strip per speaker folder in an HTML page, to spot bad videos")

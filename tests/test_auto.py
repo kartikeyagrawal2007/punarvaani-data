@@ -113,7 +113,15 @@ def test_identify_merges_folders_and_quarantines_guests(tmp_path):
         v = faces[who[clip.stem]] + 0.2 * rng.normal(size=128)
         return v / np.linalg.norm(v)
 
+    from pvdata.export import MANIFEST_FIELDS, Manifest
+
+    m = Manifest(tmp_path / "manifest.csv")
+    for cid in who:
+        m.add({k: "" for k in MANIFEST_FIELDS} | {"clip_id": cid, "speaker": cid[:5], "duration": "2.0",
+                                                 "status": "accepted"})  # fmt: skip
     summary = identify(tmp_path, embed, 0.4, quarantine=True)
+    marked = [r for r in Manifest(tmp_path / "manifest.csv").rows() if r["status"] == "rejected"]
+    assert [r["clip_id"] for r in marked] == ["spk01_007"] and marked[0]["reason"] == "identity_other_face"
     assert summary["persons"] == 2 and summary["other_face"] == 1 and summary["quarantined"] == 1
     persons = load_persons(tmp_path)
     assert sorted(map(sorted, persons.values())) == [["spk01", "spk02"], ["spk03"]]

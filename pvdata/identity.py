@@ -184,6 +184,21 @@ def identify(out: str | Path, embedder: Callable[[Path], np.ndarray | None], sam
                         shutil.move(str(src), str(dst))
                 moved += 1
 
+    if quarantine and moved and (out / "manifest.csv").exists():  # keep the manifest's hours honest
+        from pvdata.export import MANIFEST_FIELDS, Manifest
+
+        gone = {r["clip_id"]: r["status"] for r in rows if r["status"] in ("other_face", "no_face")}
+        mrows = Manifest(out / "manifest.csv").rows()
+        for r in mrows:
+            if r.get("clip_id") in gone and r.get("status") == "accepted":
+                r["status"], r["reason"] = "rejected", f"identity_{gone[r['clip_id']]}"
+        tmp = out / "manifest.tmp.csv"
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, MANIFEST_FIELDS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(mrows)
+        tmp.replace(out / "manifest.csv")
+
     with open(out / "identity" / "clips.csv", "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, ["clip_id", "folder", "status", "similarity"])
         w.writeheader()
