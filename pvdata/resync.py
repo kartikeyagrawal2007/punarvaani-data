@@ -17,7 +17,7 @@ import os
 import shutil
 import tempfile
 import threading
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -107,9 +107,27 @@ def resync(out: str | Path, cfg: Config, face_factory: Callable, scorer: Callabl
             res = {"verdict": f"error_{type(e).__name__}"}
         return {"clip_id": mp4.stem, "speaker": mp4.parent.name, **res}
 
+    def in_order(pool: ThreadPoolExecutor, tmp: Path):
+        """Results in clip order with only a few clips queued, so Ctrl+C stops within seconds."""
+        it, pending = iter(todo), deque()
+        try:
+            for c in it:
+                pending.append(pool.submit(one, c, tmp))
+                if len(pending) >= 2 * workers:
+                    break
+            while pending:
+                row = pending.popleft().result()
+                nxt = next(it, None)
+                if nxt is not None:
+                    pending.append(pool.submit(one, nxt, tmp))
+                yield row
+        finally:  # Ctrl+C or an error: drop the queue; only the clips being checked right now finish
+            for f in pending:
+                f.cancel()
+
+    errors = 0
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(workers) as pool:
-        results = pool.map(lambda c: one(c, Path(tmp)), todo)
-        errors = 0
+        results = in_order(pool, Path(tmp))
         for row in progress(results, total=len(todo)) if progress else results:
             if row["verdict"].startswith("error_"):  # not saved, so the next run tries this clip again
                 errors += 1
