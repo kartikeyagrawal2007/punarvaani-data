@@ -13,10 +13,13 @@ Stop `pvdata auto` before --apply (both write the manifest). Afterwards re-run i
 from __future__ import annotations
 
 import csv
+import os
 import shutil
 import tempfile
+import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pvdata import media
@@ -29,28 +32,25 @@ FIELDS = ["clip_id", "speaker", "frames", "cut", "face_cov", "sync_conf", "syncn
 SYNC_VERDICTS = {"ok", "low_syncnet_conf", "syncnet_offset"}  # clips that reached the SyncNet decision
 
 
-def check_file(mp4: Path, cfg: Config, face_factory: Callable, scorer: Callable, tmp: Path) -> dict:
+def check_file(mp4: Path, cfg: Config, detector: Callable, scorer: Callable, tmp: Path) -> dict:
     frames = media.read_frames(mp4, 0.0, None, FPS)
     row = {"frames": len(frames), "cut": 0}
     if cfg.shot.enabled and find_cuts(change_scores(frames), cfg.shot.min_score, cfg.shot.ratio):
         return {**row, "cut": 1, "verdict": "shot_cut"}
-    detector = face_factory()
-    try:
-        obs = [detector(f) for f in frames]
-    finally:
-        if hasattr(detector, "close"):
-            detector.close()
+    obs = [detector(f) for f in frames]
     boxes = [o.box if o.n_faces == 1 else None for o in obs]
     cov = sum(b is not None for b in boxes) / max(len(boxes), 1)
     row["face_cov"] = round(cov, 3)
     if cov < 0.9:
         return {**row, "verdict": "face_coverage"}
-    wav = tmp / "clip.wav"
+    wav = tmp / f"{mp4.stem}.wav"
     try:
         media.extract_audio(mp4, wav)
         audio = media.read_wav(wav)
     except Exception:
         return {**row, "verdict": "no_audio"}
+    finally:
+        wav.unlink(missing_ok=True)
     res = scorer(frames, boxes, audio)
     if res is None:
         return {**row, "verdict": "too_short"}
@@ -78,7 +78,9 @@ def source_rule(rows: list[dict], cfg: Config) -> set[str]:
 
 
 def resync(out: str | Path, cfg: Config, face_factory: Callable, scorer: Callable, apply: bool = False,
-           progress: Callable | None = None) -> dict:  # fmt: skip
+           progress: Callable | None = None, workers: int = 0) -> dict:  # fmt: skip
+    """``workers`` clips are checked at once (default: half the CPU cores, at most 8). Each worker keeps one face
+    detector for all its clips (loading MediaPipe per clip cost ~1 s); SyncNet runs on the GPU one batch at a time."""
     out = Path(out)
     clips = sorted((out / "raw_videos").glob("*/*.mp4"))
     csv_path = out / "resync" / "resync.csv"
@@ -91,13 +93,33 @@ def resync(out: str | Path, cfg: Config, face_factory: Callable, scorer: Callabl
         with open(csv_path, "w", encoding="utf-8", newline="") as f:
             csv.DictWriter(f, FIELDS).writeheader()
     todo = [c for c in clips if c.stem not in rows]
-    with tempfile.TemporaryDirectory() as tmp:
-        for mp4 in progress(todo) if progress else todo:
-            row = {"clip_id": mp4.stem, "speaker": mp4.parent.name,
-                   **check_file(mp4, cfg, face_factory, scorer, Path(tmp))}  # fmt: skip
-            rows[mp4.stem] = row
+    workers = workers if workers > 0 else max(1, min(8, (os.cpu_count() or 2) // 2))
+    local = threading.local()
+    detectors: list = []
+
+    def one(mp4: Path, tmp: Path) -> dict:
+        if not hasattr(local, "detector"):
+            local.detector = face_factory()
+            detectors.append(local.detector)
+        try:
+            res = check_file(mp4, cfg, local.detector, scorer, tmp)
+        except Exception as e:  # an unreadable clip must not stop a run of hours
+            res = {"verdict": f"error_{type(e).__name__}"}
+        return {"clip_id": mp4.stem, "speaker": mp4.parent.name, **res}
+
+    with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(workers) as pool:
+        results = pool.map(lambda c: one(c, Path(tmp)), todo)
+        errors = 0
+        for row in progress(results, total=len(todo)) if progress else results:
+            if row["verdict"].startswith("error_"):  # not saved, so the next run tries this clip again
+                errors += 1
+                continue
+            rows[row["clip_id"]] = row
             with open(csv_path, "a", encoding="utf-8", newline="") as f:
                 csv.DictWriter(f, FIELDS, extrasaction="ignore").writerow(row)
+    for d in detectors:
+        if hasattr(d, "close"):
+            d.close()
 
     present = {c.stem: c for c in clips}
     current = [r for cid, r in rows.items() if cid in present]
@@ -107,7 +129,7 @@ def resync(out: str | Path, cfg: Config, face_factory: Callable, scorer: Callabl
                for r in current if r["verdict"] != "ok" or r["speaker"] in bad_sources}  # fmt: skip
     summary = {"clips": len(current), "pass": len(current) - len(failing), "fail": len(failing),
                "videos_dropped": len(bad_sources), "reasons": dict(Counter(failing.values()).most_common()),
-               "applied": apply}  # fmt: skip
+               "unreadable_retry_next_run": errors, "applied": apply}  # fmt: skip
     if apply and failing:
         _apply(out, present, failing, rows)
     return summary

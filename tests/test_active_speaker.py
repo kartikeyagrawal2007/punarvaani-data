@@ -189,9 +189,19 @@ def test_resync_moves_failing_clips_and_marks_the_manifest(tmp_path):
     rows = _run(tmp_path, None)  # mined with the old checks only
     out = tmp_path / "out"
     assert sum(r["status"] == "accepted" for r in rows) == 2
-    dry = resync(out, Config(), BoxFace, _fake_syncnet(1.0))
-    assert dry == {"clips": 2, "pass": 0, "fail": 2, "videos_dropped": 0,
-                   "reasons": {"low_syncnet_conf": 2}, "applied": False}  # fmt: skip
+    spk = next((out / "raw_videos").iterdir())
+    (spk / f"{spk.name}_999.mp4").write_bytes(b"not a video")  # e.g. a clip still being written
+    made = []
+
+    def factory():
+        made.append(1)
+        return BoxFace()
+
+    dry = resync(out, Config(), factory, _fake_syncnet(1.0), workers=2)
+    assert dry == {"clips": 2, "pass": 0, "fail": 2, "videos_dropped": 0, "reasons": {"low_syncnet_conf": 2},
+                   "unreadable_retry_next_run": 1, "applied": False}  # fmt: skip
+    assert len(made) <= 2  # one face detector per worker, not per clip
+    (spk / f"{spk.name}_999.mp4").unlink()
     assert len(list((out / "raw_videos").glob("*/*.mp4"))) == 2
     done = resync(out, Config(), BoxFace, _fake_syncnet(9.0), apply=True)  # cached: the first scores are kept
     assert done["fail"] == 2 and done["applied"]

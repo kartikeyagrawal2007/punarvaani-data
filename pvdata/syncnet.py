@@ -18,6 +18,7 @@ when a scorer is built (``pip install -e .[syncnet]``).
 
 from __future__ import annotations
 
+import logging
 import threading
 import urllib.request
 from dataclasses import dataclass
@@ -42,11 +43,25 @@ class SyncNetResult:
 def ensure_weights(path: str | Path | None = None) -> Path:
     """Path to syncnet_v2.model, downloading it to ~/.cache/pvdata on first use (about 52 MB)."""
     target = Path(path) if path else Path.home() / ".cache" / "pvdata" / "syncnet_v2.model"
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".part")
-        urllib.request.urlretrieve(WEIGHTS_URL, tmp)
-        tmp.replace(target)
+    if target.exists():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".part")
+    log = logging.getLogger("pvdata")
+    log.info("downloading SyncNet weights (~52 MB) to %s from %s", target, WEIGHTS_URL)
+    log.info("(the Oxford server can be slow; if it stalls, download that link in a browser and save it there)")
+    done = tmp.stat().st_size if tmp.exists() else 0
+    req = urllib.request.Request(WEIGHTS_URL, headers={"Range": f"bytes={done}-"} if done else {})
+    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "ab" if done and r.status == 206 else "wb") as f:
+        got = done if r.status == 206 else 0  # 206 = the server resumed; 200 = it sent the whole file again
+        total, next_log = got + int(r.headers.get("Content-Length") or 0), 0
+        while chunk := r.read(1 << 16):
+            f.write(chunk)
+            got += len(chunk)
+            if got >= next_log:
+                log.info("  %.1f / %.1f MB", got / 1e6, total / 1e6)
+                next_log = got + 5_000_000
+    tmp.replace(target)
     return target
 
 
