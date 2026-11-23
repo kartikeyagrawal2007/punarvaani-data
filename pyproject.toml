@@ -25,6 +25,8 @@ asr = ["faster-whisper>=1.0"]
 whisperx = ["whisperx>=3.1"]
 # IndicWhisper / any Hugging Face Whisper checkpoint
 hf = ["transformers>=4.40", "torch>=2.1", "soundfile>=0.12"]
+# SyncNet active-speaker check (on by default; pass --no-syncnet to mine without it)
+syncnet = ["torch>=2.1", "python_speech_features>=0.6", "scipy>=1.10"]
 dev = ["pytest>=7.4", "ruff==0.17.1"]
 
 [project.scripts]

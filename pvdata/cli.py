@@ -5,6 +5,7 @@ pvdata auto     --seeds sources/seeds.csv --out dataset/           # find + scre
 pvdata screen   https://www.youtube.com/watch?v=XXXX                 # would auto accept this video? (dry run)
 pvdata snapshot --out dataset/ --to handover/ --hours 2              # balanced copy of finished clips
 pvdata identify --out dataset/                                       # face ids: merge persons, flag guests
+pvdata resync   --out dataset/ [--apply]                             # re-check old clips with SyncNet
 pvdata validate dataset/raw_videos                                   # check the TEAM_GUIDE rules
 pvdata split    --out dataset/                                       # speaker-disjoint train/val/test
 pvdata report   --out dataset/                                       # counts + rejection reasons
@@ -19,6 +20,22 @@ import sys
 from pathlib import Path
 
 from pvdata.config import Config
+
+
+def _syncnet(cfg, args):
+    """The SyncNet scorer, or None when the config or --no-syncnet asks for the cheap correlation check only."""
+    if not cfg.sync.enabled or cfg.sync.method != "syncnet" or getattr(args, "no_syncnet", False):
+        return None
+    try:
+        from pvdata.syncnet import SyncNetScorer
+
+        return SyncNetScorer(cfg.sync.syncnet_weights or None, cfg.sync.device)
+    except ImportError as e:
+        raise SystemExit(
+            f"SyncNet needs torch and python_speech_features ({e}). Install them with\n"
+            "    pip install -e .[syncnet]\n"
+            "or run with --no-syncnet (cheap correlation check only, lets some voice-over through)."
+        ) from e
 
 
 def _cmd_run(args) -> int:
@@ -39,7 +56,7 @@ def _cmd_run(args) -> int:
     transcriber = make_transcriber(a.backend, args.asr_model or a.model, a.language, a.device, a.compute_type)
     pipe = Pipeline(cfg, args.out, args.work or Path(args.out) / "work", transcriber,
                     lambda: MediaPipeFaces(args.face_model, cfg.clip.fps), cookies=args.cookies,
-                    workers=args.workers)  # fmt: skip
+                    workers=args.workers, syncnet=_syncnet(cfg, args))  # fmt: skip
     report = pipe.run(sources, progress=lambda s: tqdm(s, desc="sources"))
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
@@ -66,7 +83,8 @@ def _cmd_auto(args) -> int:
     work = args.work or Path(args.out) / "work"
     transcriber = _models(args, cfg)
     pipe = Pipeline(cfg, args.out, work, transcriber, lambda: MediaPipeFaces(args.face_model, cfg.clip.fps),
-                    cookies=args.cookies, workers=args.workers, keep_downloads=cfg.auto.keep_downloads)  # fmt: skip
+                    cookies=args.cookies, workers=args.workers, keep_downloads=cfg.auto.keep_downloads,
+                    syncnet=_syncnet(cfg, args))  # fmt: skip
     screener = Screener(cfg, work, transcriber, lambda fps: MediaPipeFaces(args.face_model, fps), args.cookies)
     pilot = AutoPilot(cfg, args.out, read_seeds(args.seeds), pipe, screener, search_raw, channel_videos)
     summary = pilot.run(args.target_hours, args.max_videos)
@@ -168,6 +186,28 @@ def _cmd_exclude(args) -> int:
     return 0
 
 
+def _cmd_resync(args) -> int:
+    from tqdm import tqdm
+
+    from pvdata.face import MediaPipeFaces
+    from pvdata.resync import resync
+    from pvdata.syncnet import FPS
+
+    cfg = Config.load(args.config)
+    scorer = _syncnet(cfg, argparse.Namespace(no_syncnet=False))
+    if scorer is None:
+        raise SystemExit("resync needs SyncNet: set sync.enabled: true and sync.method: syncnet")
+    summary = resync(args.out, cfg, lambda: MediaPipeFaces(args.face_model, FPS), scorer, apply=args.apply,
+                     progress=lambda s: tqdm(s, desc="clips"))  # fmt: skip
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.apply:
+        print(f"next: pvdata identify --out {args.out} --quarantine; pvdata split --out {args.out}; "
+              f"pvdata validate {Path(args.out) / 'raw_videos'}; pvdata report --out {args.out}")  # fmt: skip
+    else:
+        print("dry run: nothing moved. Watch a few clips from resync/resync.csv near the threshold, then add --apply.")
+    return 0
+
+
 def _cmd_report(args) -> int:
     from pvdata.export import Manifest, build_report, write_json
 
@@ -193,7 +233,8 @@ def main(argv=None) -> int:
     r.add_argument("--asr-model", help="override the ASR model name / Hugging Face id")
     r.add_argument("--face-model", help="path to face_landmarker.task (downloaded automatically if omitted)")
     r.add_argument("--cookies", help="cookies.txt for yt-dlp if YouTube asks to sign in")
-    r.add_argument("--no-sync", action="store_true", help="skip the audio-mouth sync check")
+    r.add_argument("--no-sync", action="store_true", help="skip the audio-mouth sync checks")
+    r.add_argument("--no-syncnet", action="store_true", help="cheap correlation sync check only (no GPU model)")
     r.add_argument("--limit", type=int, help="only the first N sources (for a quick test)")
     r.add_argument(
         "--workers",
@@ -214,6 +255,7 @@ def main(argv=None) -> int:
     au.add_argument("--face-model")
     au.add_argument("--cookies")
     au.add_argument("--workers", type=int, default=0)
+    au.add_argument("--no-syncnet", action="store_true", help="cheap correlation sync check only (no GPU model)")
     au.set_defaults(fn=_cmd_auto)
 
     sc = sub.add_parser("screen", help="screen one YouTube video (face + Hindi checks on 3 short samples)")
@@ -267,6 +309,12 @@ def main(argv=None) -> int:
     ex.add_argument("--out", required=True)
     ex.add_argument("speakers", nargs="+", help="speaker folders, e.g. spk385 spk402")
     ex.set_defaults(fn=_cmd_exclude)
+
+    rs = sub.add_parser("resync", help="re-check existing clips with SyncNet + shot cuts; --apply removes failures")
+    rs.add_argument("--out", required=True)
+    rs.add_argument("--apply", action="store_true", help="move failing clips to <out>/excluded_sync/ (stop auto first)")
+    rs.add_argument("--face-model")
+    rs.set_defaults(fn=_cmd_resync)
 
     p = sub.add_parser("report", help="recompute report.json from manifest.csv")
     p.add_argument("--out", required=True)

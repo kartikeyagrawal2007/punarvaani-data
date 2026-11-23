@@ -20,7 +20,7 @@ CLIP_NAME = re.compile(r"^(spk\d{2,})_(\d{3,})$")
 MANIFEST_FIELDS = [
     "clip_id", "speaker", "speaker_name", "source_url", "source_id", "license", "channel", "title", "upload_date", "start", "end", "duration", "text",
     "raw_asr_text", "ctc_need", "asr_min_prob", "face_ratio", "yaw", "pitch", "sync_corr", "sync_offset",
-    "status", "reason",
+    "sync_conf", "syncnet_offset", "status", "reason",
 ]  # fmt: skip
 
 
@@ -50,8 +50,27 @@ class Manifest:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w", encoding="utf-8", newline="") as f:
                 csv.DictWriter(f, MANIFEST_FIELDS).writeheader()
+        self._header_ok = False
+
+    def _upgrade_header(self) -> None:
+        """A manifest written by an older version gets the new columns before we append to it (rows are kept).
+        Only the writer does this, so readers (snapshot, review) never rewrite a file a running miner appends to."""
+        if self._header_ok:
+            return
+        with open(self.path, encoding="utf-8", newline="") as f:
+            header = next(csv.reader(f), [])
+        if header != MANIFEST_FIELDS:
+            rows = self.rows()
+            tmp = self.path.with_suffix(".tmp.csv")
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                w = csv.DictWriter(f, MANIFEST_FIELDS, extrasaction="ignore")
+                w.writeheader()
+                w.writerows(rows)
+            tmp.replace(self.path)
+        self._header_ok = True
 
     def add(self, row: dict) -> None:
+        self._upgrade_header()
         with open(self.path, "a", encoding="utf-8", newline="") as f:
             csv.DictWriter(f, MANIFEST_FIELDS, extrasaction="ignore").writerow(row)
 

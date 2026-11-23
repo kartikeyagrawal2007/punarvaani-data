@@ -33,6 +33,7 @@ class FaceObs:
     face_h_frac: float = 0.0
     mouth_w_px: float = 0.0
     opening: float = 0.0
+    box: tuple[float, float, float, float] | None = None  # x0, y0, x1, y1 of the landmarks, in pixels
 
 
 def ensure_model(path: str | Path | None = None) -> Path:
@@ -57,7 +58,10 @@ def observe(landmarks_px: np.ndarray, matrix: np.ndarray | None, frame_h: int, n
     gap = float(np.linalg.norm(landmarks_px[LIP_BOTTOM] - landmarks_px[LIP_TOP]))
     face_h = float(np.linalg.norm(landmarks_px[CHIN] - landmarks_px[FOREHEAD]))
     yaw, pitch = euler_from_matrix(matrix) if matrix is not None else (0.0, 0.0)
-    return FaceObs(n_faces, yaw, pitch, face_h / max(frame_h, 1), mouth_w, gap / max(mouth_w, 1e-6))
+    x0, y0 = landmarks_px.min(axis=0)
+    x1, y1 = landmarks_px.max(axis=0)
+    box = (float(x0), float(y0), float(x1), float(y1))
+    return FaceObs(n_faces, yaw, pitch, face_h / max(frame_h, 1), mouth_w, gap / max(mouth_w, 1e-6), box)
 
 
 class MediaPipeFaces:

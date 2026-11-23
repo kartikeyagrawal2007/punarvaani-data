@@ -24,9 +24,21 @@ face:
   min_mouth_px: 40
 sync:
   enabled: true
-  max_lag_frames: 5
+  max_lag_frames: 5            # cheap pre-filter: mouth opening vs loudness
   min_corr: 0.15
   max_abs_offset_frames: 3
+  method: syncnet              # syncnet | corr. SyncNet asks "is the face on screen the voice we hear?"
+  syncnet_weights: ""          # empty = ~/.cache/pvdata/syncnet_v2.model (downloaded on first use)
+  device: auto
+  min_conf: 4.0                # talking heads ~5-10; voice-over, B-roll, dubbing ~0-2
+  max_syncnet_offset: 4        # frames at 25 fps
+  context_s: 1.0               # also score up to 1 s of the same shot around the clip
+  min_source_checked: 8        # per video: if fewer than half of its clips pass the sync checks,
+  min_source_pass_rate: 0.5    # it is a news package / B-roll, and all its clips are dropped
+shot:
+  enabled: true                # a clip must be one camera shot (no cut to B-roll inside it)
+  min_score: 15.0
+  ratio: 3.0
 video:
   min_height: 720
   out_height: 720

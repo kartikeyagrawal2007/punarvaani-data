@@ -3,9 +3,11 @@
     source (URL or file) ─► download (yt-dlp) ─► audio 16 kHz (ffmpeg)
       ─► ASR with word timestamps (Whisper / WhisperX / IndicWhisper)
       ─► cut into 1.5–2.5 s word-aligned candidates
-      ─► per candidate:  transcript rules ─► ASR confidence ─► CTC length (U+R ≤ 32)
+      ─► per candidate:  transcript rules ─► ASR confidence ─► CTC length
+                          ─► one camera shot (no cut inside the clip)
                           ─► face checks (one frontal face, big enough, mouth visible, ≥95% of frames)
-                          ─► audio–mouth sync
+                          ─► audio–mouth sync: cheap correlation, then SyncNet (is the face the voice?)
+      ─► per video: if most clips fail the sync checks it is voice-over / B-roll, so drop all of its clips
       ─► accepted: raw_videos/spkXX/spkXX_NNN.mp4 + .txt      rejected: logged with the reason
 
 Everything is cached under <work>/ so a crashed or interrupted run continues where it stopped.
@@ -31,8 +33,10 @@ from pvdata.ctc import ctc_steps_for, fits_ctc
 from pvdata.export import Manifest, build_report, clip_paths, is_youtube, next_index, write_json, write_transcript
 from pvdata.face import FaceObs, check_clip, scan_frames
 from pvdata.segment import Candidate, segment_words
+from pvdata.shots import change_scores, find_cuts, shot_bounds
 from pvdata.sources import Source, speaker_ids
 from pvdata.sync import loudness_envelope, sync_score
+from pvdata.syncnet import FPS as SYNCNET_FPS
 from pvdata.text_norm import normalize_transcript
 
 log = logging.getLogger("pvdata")
@@ -44,13 +48,15 @@ class Decision:
     reason: str = ""
     text: str = ""
     info: dict = field(default_factory=dict)
+    reached_sync: bool = False  # passed text, shot and face checks, so the sync checks judged it
 
 
 class Pipeline:
     def __init__(self, cfg: Config, out: str | Path, work: str | Path, transcriber: Transcriber,
                  face_factory: Callable[[], Callable[[np.ndarray], FaceObs]], cookies: str | None = None,
-                 workers: int = 1, keep_downloads: bool = True):  # fmt: skip
+                 workers: int = 1, keep_downloads: bool = True, syncnet: Callable | None = None):  # fmt: skip
         self.cfg, self.out, self.work = cfg, Path(out), Path(work)
+        self.syncnet = syncnet  # SyncNetScorer, or None for the cheap correlation check only
         self.transcriber, self.face_factory, self.cookies = transcriber, face_factory, cookies
         self.workers = workers if workers > 0 else min(8, os.cpu_count() or 2)
         self.keep_downloads = keep_downloads
@@ -142,6 +148,8 @@ class Pipeline:
         if not ok:
             return Decision("rejected", "too_many_phonemes", norm.text, info)
         frames = media.read_frames(video, offset + cand.start, offset + cand.end, c.clip.fps, c.video.out_height)
+        if c.shot.enabled and find_cuts(change_scores(frames), c.shot.min_score, c.shot.ratio):
+            return Decision("rejected", "shot_cut", norm.text, info)
         detector = self.face_factory()
         try:
             obs = scan_frames(detector, frames, c.face)
@@ -161,8 +169,65 @@ class Pipeline:
             sync = sync_score(np.array(face.openings), env, c.sync)
             info.update(sync_corr=round(sync.corr, 3), sync_offset=sync.offset_frames)
             if not sync.ok:
-                return Decision("rejected", f"sync_{sync.reason}", norm.text, info)
-        return Decision("accepted", "", norm.text, info)
+                return Decision("rejected", f"sync_{sync.reason}", norm.text, info, True)
+            if self.syncnet is not None:
+                res = self.syncnet_check(cand, video, offset, audio)
+                if res is None:
+                    return Decision("rejected", "sync_syncnet_no_face", norm.text, info, True)
+                info.update(sync_conf=round(res.conf, 2), syncnet_offset=res.offset)
+                if res.conf < c.sync.min_conf:
+                    return Decision("rejected", "sync_low_syncnet_conf", norm.text, info, True)
+                if abs(res.offset) > c.sync.max_syncnet_offset:
+                    return Decision("rejected", "sync_syncnet_offset", norm.text, info, True)
+        return Decision("accepted", "", norm.text, info, c.sync.enabled)
+
+    def syncnet_check(self, cand: Candidate, video: Path, offset: float, audio: np.ndarray):
+        """SyncNet on the clip plus up to ``context_s`` of the same shot on each side (steadier than 1.5 s alone).
+
+        Falls back to the clip alone when the context is not one clean face (a cut to B-roll, a second person)."""
+        c, sr, fps = self.cfg, media.SAMPLE_RATE, SYNCNET_FPS
+        a0 = max(0.0, cand.start - c.sync.context_s)
+        a1 = min(len(audio) / sr, cand.end + c.sync.context_s)
+        frames = media.read_frames(video, offset + a0, offset + a1, fps, c.video.out_height)
+        n = len(frames)
+        lo = min(n - 1, round((cand.start - a0) * fps))
+        hi = min(n, max(lo + 1, round((cand.end - a0) * fps)))
+        cuts = find_cuts(change_scores(frames), c.shot.min_score, c.shot.ratio) if c.shot.enabled else []
+        s, e = shot_bounds([i for i in cuts if not lo < i < hi], n, lo, hi)
+        detector = self.face_factory()
+        try:
+            obs = [detector(f) for f in frames[s:e]]
+        finally:
+            if hasattr(detector, "close"):
+                detector.close()
+        boxes = [o.box if o.n_faces == 1 else None for o in obs]
+
+        def clean(i0: int, i1: int) -> list | None:
+            bx = boxes[i0 - s : i1 - s]
+            return bx if bx and sum(b is not None for b in bx) >= 0.9 * len(bx) else None
+
+        for i0, i1 in ((s, e), (lo, hi)):
+            bx = clean(i0, i1)
+            if bx is not None:
+                seg = audio[int((a0 + i0 / fps) * sr) : int((a0 + i1 / fps) * sr)]
+                return self.syncnet(frames[i0:i1], bx, seg)
+        return None
+
+    def drop_voiceover_sources(self, decisions: list[Decision]) -> bool:
+        """A real talking-head video passes most of its sync checks; a news package with B-roll fails most.
+        When too few pass, the few that did are likely chance matches: reject every clip of the video."""
+        s = self.cfg.sync
+        checked = [d for d in decisions if d.reached_sync]
+        if not s.enabled or len(checked) < s.min_source_checked:
+            return False
+        rate = sum(d.status == "accepted" for d in checked) / len(checked)
+        if rate >= s.min_source_pass_rate:
+            return False
+        for d in decisions:
+            if d.status == "accepted":
+                d.status, d.reason = "rejected", "source_low_sync_rate"
+        log.info("dropped the whole video: only %.0f%% of %d clips passed the sync checks", 100 * rate, len(checked))
+        return True
 
     # ---------------------------------------------------------------- driver
     def run_source(self, src: Source, spk: str) -> dict:
@@ -192,11 +257,12 @@ class Pipeline:
             audio = media.read_wav(wav)
             cands = segment_words(words, self.cfg.clip, end - start, accept=self.accept_text)
             t0 = time.time()
-            # Judging (frame decoding + face + sync) runs in parallel; writing clips stays in order, one at a time.
+            # Judging (frame decoding + face + sync) runs in parallel; then the per-video rule, then writing in order.
             with ThreadPoolExecutor(self.workers) as pool:
-                decisions = pool.map(lambda c: self.judge(c, video, start, audio), cands)
-                for cand, d in zip(cands, decisions):
-                    self._write(src, spk, video, start, cand, d, base_row, counts)
+                decisions = list(pool.map(lambda c: self.judge(c, video, start, audio), cands))
+            self.drop_voiceover_sources(decisions)
+            for cand, d in zip(cands, decisions):
+                self._write(src, spk, video, start, cand, d, base_row, counts)
             log.info("judged %d candidates of %s in %.0f s (%d workers)", len(cands), src.url, time.time() - t0,
                      self.workers)  # fmt: skip
         counts["accepted_s"] = round(counts["accepted_s"], 2)

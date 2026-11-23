@@ -56,7 +56,7 @@ flowchart TD
     C3 -- no --> R
     C3 -- yes --> C4{8. Face checks<br/>1 frontal face, big,<br/>mouth visible ≥95%}
     C4 -- no --> R
-    C4 -- yes --> C5{9. Lips in sync<br/>with the voice?}
+    C4 -- yes --> C5{9. One camera shot, and<br/>is the face the voice?<br/>correlation + SyncNet}
     C5 -- no --> R
     C5 -- yes --> OK[10. Save clip<br/>raw_videos/spk01/spk01_001.mp4 + .txt]
     OK --> M[manifest.csv · report.json]
@@ -77,7 +77,7 @@ The checks run **cheapest first**: text checks take microseconds, face detection
 | 6 | ASR confidence | Drops a clip if Whisper was unsure of any word | A wrong label teaches the model wrong things | `pipeline.py` |
 | 7 | CTC length | Converts the text to phonemes **with the trainer's own G2P** and checks U + R ≤ 32 | The trainer would silently drop longer clips anyway | `ctc.py`, `g2p/` |
 | 8 | Face checks | MediaPipe finds the face in every frame: exactly one face, turned/tilted ≤ 20°, face ≥ 18% of frame height, mouth ≥ 40 px, in ≥ 95% of frames | Lips must be clearly visible from the front | `face.py` |
-| 9 | Sync | Does the mouth open when the voice is loud? (correlation, within ±0.2 s) | Removes dubbing, voice-over and B-roll | `sync.py` |
+| 9 | Active speaker | No camera cut inside the clip; mouth moves with the loudness (cheap); SyncNet confirms the face on screen is the voice heard (confidence ≥ 4). A video where most clips fail is dropped whole | Removes voice-over on B-roll (an anchor talking over footage of someone else), dubbing and cutaways | `shots.py`, `sync.py`, `syncnet.py` |
 | 10 | Save | Writes the clip (720p, 25 fps) and transcript, logs every decision | Exactly the format Aayush's trainer reads | `export.py` |
 
 ### 3.3 What comes out
@@ -100,7 +100,7 @@ dataset/
 | Every rejection logged with a reason | Lets us tune the filters, and the rejection funnel is a result in the paper |
 | Same G2P file as the trainer | Our length check gives exactly the trainer's answer |
 | Resumable (cache + `done/` markers) | Long runs crash or get interrupted; nothing is redone |
-| Light sync check instead of SyncNet | No extra model or GPU needed; good enough to catch voice-overs. SyncNet is a planned upgrade |
+| SyncNet after a cheap correlation check | The correlation alone passes some voice-over (two speech signals correlate ~0.25-0.3 by chance on a 2 s clip); SyncNet is the standard active-speaker model used to build LRS2/LRS3, and the cheap check keeps it from running on obvious failures |
 | Clips not videos in the paper release | Copyright: publish IDs + timestamps + transcripts, like LRS3 and VoxCeleb |
 
 ---
@@ -214,10 +214,10 @@ Then hand-check about 100 random clips: is the transcript right, are the lips vi
 
 | Improvement | What it fixes | Effort |
 |---|---|---|
-| **SyncNet** instead of the light sync check | More precise rejection of off-sync clips | Medium |
+| ~~SyncNet~~ | Done: `syncnet.py`, plus `pvdata resync` for old clips | ✅ |
 | **Two-ASR agreement** (Whisper + IndicWhisper must agree) | Fewer wrong transcripts, and a measurable label-quality score | Medium |
 | ~~Face identity check~~ | Done: `pvdata identify` | ✅ |
-| **Shot-cut detection** | Drops clips that cross a camera cut | Small |
+| ~~Shot-cut detection~~ | Done: `shots.py` | ✅ |
 | **Hinglish → Devanagari transliteration** (AI4Bharat IndicXlit) | Keeps clips with English loanwords instead of dropping them | Small |
 | **Export mouth crops directly** (skip the second cropping pass) | Faster handover, one source of truth | Small |
 | ~~Parallel processing~~ | Done: parallel checks + background download | ✅ |

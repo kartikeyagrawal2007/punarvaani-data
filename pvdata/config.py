@@ -42,9 +42,29 @@ class FaceConfig:
 @dataclass
 class SyncConfig:
     enabled: bool = True
+    # 1) cheap pre-filter: correlation of mouth opening vs speech loudness (sync.py)
     max_lag_frames: int = 5  # search +-0.2 s for the best audio/mouth alignment
-    min_corr: float = 0.15  # correlation of mouth opening vs speech loudness
-    max_abs_offset_frames: int = 3  # best alignment must be near zero lag (dubbing / B-roll fail this)
+    min_corr: float = 0.15
+    max_abs_offset_frames: int = 3  # best alignment must be near zero lag
+    # 2) SyncNet active-speaker check (syncnet.py): is the face on screen the voice we hear?
+    method: str = "syncnet"  # syncnet | corr (corr = only the cheap check, e.g. without a GPU)
+    syncnet_weights: str = ""  # empty = ~/.cache/pvdata/syncnet_v2.model, downloaded on first use
+    device: str = "auto"
+    min_conf: float = 4.0  # SyncNet confidence; talking heads ~5-10, voice-over / B-roll / dubbing ~0-2
+    max_syncnet_offset: int = 4  # frames at 25 fps; voice-over has its "best" shift anywhere in +-15
+    context_s: float = 1.0  # score clip +- this much of the same shot (longer windows give steadier scores)
+    # 3) per video: a news package with B-roll fails most of its clips; drop the few that slip through
+    min_source_checked: int = 8  # only judge videos with at least this many clips that reached the sync check
+    min_source_pass_rate: float = 0.5  # share of those that must pass, else every clip of the video is dropped
+
+
+@dataclass
+class ShotConfig:
+    """A clip must be one continuous camera shot (shots.py, adaptive rule as in PySceneDetect)."""
+
+    enabled: bool = True
+    min_score: float = 15.0  # mean HSV change between frames (0-255 scale) that can be a cut ...
+    ratio: float = 3.0  # ... and at least this many times the change in the neighbouring frames
 
 
 @dataclass
@@ -96,6 +116,7 @@ class AutoConfig:
     keep_downloads: bool = False  # delete the full video and audio once a source is mined (disk!)
     exclude_title_regex: str = (
         r"(?i)debate|panel|compilation|#shorts|\bshorts\b|jukebox|trailer|song|lyrics|gaana|reaction|"
+        r"\bnews\b|bulletin|headlines|breaking|prime ?time|न्यूज़|न्यूज|समाचार|बुलेटिन|सुर्खियां|ब्रेकिंग|"
         r"live stream|animation|animated|cartoon|avatar|\b3d\b|बहस|डिबेट|गाना|गीत|भजन|मुकाबला|दंगल|कार्टून|"
         r"एनिमेशन|एनीमेशन"
     )
@@ -115,6 +136,7 @@ class Config:
     text: TextConfig = field(default_factory=TextConfig)
     face: FaceConfig = field(default_factory=FaceConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
+    shot: ShotConfig = field(default_factory=ShotConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
     screen: ScreenConfig = field(default_factory=ScreenConfig)

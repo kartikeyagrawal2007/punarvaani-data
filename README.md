@@ -46,7 +46,7 @@ Rules enforced, from `TEAM_GUIDE.md`:
 ```bash
 git clone <this repo> && cd punarvaani-data
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[download,asr,dev]"     # yt-dlp + faster-whisper
+pip install -e ".[download,asr,syncnet,dev]"   # yt-dlp + faster-whisper + SyncNet
 # ffmpeg must be installed:  macOS: brew install ffmpeg   Ubuntu/Colab: apt-get install -y ffmpeg
 pytest -q                                 # 51 tests, ~60 s, no internet needed
 ```
@@ -91,7 +91,7 @@ python scripts/preprocess_lips.py --input_dir /path/to/dataset/raw_videos --outp
 
 ### Colab (GPU) in four cells
 ```python
-!git clone <this repo> && cd punarvaani-data && pip install -q -e ".[download,asr]" && apt-get -qq install -y ffmpeg
+!git clone <this repo> && cd punarvaani-data && pip install -q -e ".[download,asr,syncnet]" && apt-get -qq install -y ffmpeg
 %cd punarvaani-data
 !pvdata run --sources sources/my_sources.csv --out /content/drive/MyDrive/punarvaani_dataset
 !pvdata validate /content/drive/MyDrive/punarvaani_dataset/raw_videos && pvdata split --out /content/drive/MyDrive/punarvaani_dataset
@@ -166,7 +166,10 @@ For the paper, also report:
 | `low_asr_confidence` | Whisper unsure of a word | Try `--asr-model` with IndicWhisper (`asr.backend: hf`) for better Hindi |
 | `too_many_phonemes` | Too much speech for 32 CTC steps | Expected for fast speakers |
 | `face_no_face` / `face_multiple_faces` / `face_not_frontal` / `face_face_too_small` / `face_mouth_too_small` | Fails the face rules in ≥ 5% of frames | Pick tighter `start`/`end`, or better videos |
-| `sync_weak_av_correlation` / `sync_av_offset` | Mouth doesn't match the audio (voice-over, dubbing, B-roll) | Usually correct to drop |
+| `shot_cut` | The clip crosses a camera cut (anchor → B-roll, wide → close-up) | Correct to drop |
+| `sync_weak_av_correlation` / `sync_av_offset` | Cheap check: mouth doesn't move with the audio | Usually correct to drop |
+| `sync_low_syncnet_conf` / `sync_syncnet_offset` | SyncNet: the face on screen is not the voice we hear (voice-over, a news anchor talking over footage of someone else, dubbing) | Correct to drop |
+| `source_low_sync_rate` | Fewer than half of this video's clips passed the sync checks: a news package or B-roll montage, so its few "passes" are chance matches | Correct to drop |
 | `source_below_720p` | Video is below 720p | Find an HD upload |
 
 Thresholds are in `configs/default.yaml`; copy it and pass `--config my.yaml` to change them.
@@ -182,7 +185,10 @@ Thresholds are in `configs/default.yaml`; copy it and pass `--config my.yaml` to
 | `pvdata/text_norm.py` | TEAM_GUIDE transcript rules, Hindi number words |
 | `pvdata/ctc.py` + `pvdata/g2p/` | the trainer's CTC length rule with the trainer's own G2P |
 | `pvdata/face.py` | MediaPipe face count, head pose, face/mouth size, mouth opening |
-| `pvdata/sync.py` | audio-loudness vs mouth-opening correlation (a light stand-in for SyncNet) |
+| `pvdata/sync.py` | cheap pre-filter: audio loudness vs mouth opening correlation |
+| `pvdata/syncnet.py` | SyncNet active-speaker check (port of joonson/syncnet_python, same weights) |
+| `pvdata/shots.py` | shot-cut detection (a clip must be one camera shot) |
+| `pvdata/resync.py` | `pvdata resync`: re-check clips already in a dataset with SyncNet + shot cuts |
 | `pvdata/pipeline.py` | runs everything per video, resumable; downloads the next video in the background |
 | `pvdata/find.py` | YouTube search and channel listing (metadata only) |
 | `pvdata/screen.py` | automatic review of a video from 3 short low-res samples |
@@ -193,5 +199,6 @@ Thresholds are in `configs/default.yaml`; copy it and pass `--config my.yaml` to
 ## Notes
 
 - `pvdata/g2p/hindi_g2p.py` is a copy of `Data/hindi_g2p.py` from the main repo. If that file changes there, copy it again so the CTC check stays identical to training.
-- The sync check is deliberately light. For a large final run, [SyncNet](https://github.com/joonson/syncnet_python) can replace it.
+- **Active speaker (is the face on screen the voice we hear?)** is checked in three layers: one camera shot per clip, a cheap mouth/loudness correlation, then [SyncNet](https://github.com/joonson/syncnet_python) on the clip plus up to 1 s of the same shot. SyncNet needs `pip install -e .[syncnet]` (torch + python_speech_features) and downloads `syncnet_v2.model` (~52 MB) on first use; a GPU makes it fast. `--no-syncnet` mines with the cheap check only. A video where fewer than half of the clips pass is dropped whole.
+- **Clips mined before SyncNet** can be re-checked in place: `pvdata resync --out dataset/` (dry run, writes `resync/resync.csv`), look at a few clips near the threshold, then `pvdata resync --out dataset/ --apply` (stop `auto` first) and re-run `identify`, `split`, `validate`.
 - Licence: MIT for this code. The videos you mine keep their own copyright.
