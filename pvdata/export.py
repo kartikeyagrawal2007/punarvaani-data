@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import random
 import re
 from collections import Counter
@@ -173,9 +174,45 @@ def write_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _link_dir(src: Path, dst: Path) -> None:
+    """Folder link without copying: a symlink, or on Windows without Developer Mode a directory junction
+    (needs no special rights). Copies only if both fail, since a full copy of a big dataset can fill the disk."""
+    import shutil
+
+    try:
+        dst.symlink_to(src, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    if os.name == "nt":
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(str(src), str(dst))
+            return
+        except OSError:
+            pass
+    shutil.copytree(src, dst)
+
+
+def _is_link(p: Path) -> bool:
+    """Symlink or Windows junction. Python 3.11 has no Path.is_junction, and shutil.rmtree on a junction there
+    deletes the target's files, so junctions are detected from the reparse-point attribute instead."""
+    if p.is_symlink():
+        return True
+    if hasattr(p, "is_junction"):
+        return p.is_junction()
+    try:
+        import stat
+
+        return bool(os.lstat(p).st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    except (OSError, AttributeError):
+        return False
+
+
 def materialise_splits(out: Path, splits: dict[str, list[str]], link: bool = True) -> dict[str, int]:
-    """Create <out>/splits/{train,val,test}/spkXX -> raw_videos/spkXX (symlinks by default) for the trainer's
-    dedicated-split mode. Returns clip counts per split."""
+    """Create <out>/splits/{train,val,test}/spkXX -> raw_videos/spkXX (symlinks, or junctions on Windows) for
+    the trainer's dedicated-split mode. Returns clip counts per split."""
     counts: dict[str, int] = {}
     for split, spks in splits.items():
         base = out / "splits" / split
@@ -186,20 +223,14 @@ def materialise_splits(out: Path, splits: dict[str, list[str]], link: bool = Tru
             dst = base / spk
             if not src.exists():
                 continue
-            if dst.is_symlink() or dst.exists():
-                if dst.is_symlink():
-                    dst.unlink()
-                else:
-                    import shutil
+            if _is_link(dst):
+                os.unlink(dst) if dst.is_symlink() else os.rmdir(dst)  # removes the link, never the clips
+            elif dst.exists():
+                import shutil
 
-                    shutil.rmtree(dst)
+                shutil.rmtree(dst)
             if link:
-                try:
-                    dst.symlink_to(src, target_is_directory=True)
-                except OSError:  # Windows without Developer Mode can't create symlinks: copy instead
-                    import shutil
-
-                    shutil.copytree(src, dst)
+                _link_dir(src, dst)
             else:
                 import shutil
 
