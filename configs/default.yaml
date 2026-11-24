@@ -30,7 +30,7 @@ sync:
   method: syncnet              # syncnet | corr. SyncNet asks "is the face on screen the voice we hear?"
   syncnet_weights: ""          # empty = ~/.cache/pvdata/syncnet_v2.model (downloaded on first use)
   device: auto
-  min_conf: 4.0                # talking heads ~5-10; voice-over, B-roll, dubbing ~0-2
+  min_conf: 3.0                # talking heads ~5-10; voice-over, B-roll, dubbing ~0-2 (3-4 checked by eye: fine)
   max_syncnet_offset: 4        # frames at 25 fps
   context_s: 1.0               # also score up to 1 s of the same shot around the clip
   min_source_checked: 8        # per video: if fewer than half of its clips pass the sync checks,
@@ -39,6 +39,7 @@ shot:
   enabled: true                # a clip must be one camera shot (no cut to B-roll inside it)
   min_score: 15.0
   ratio: 3.0
+  same_face_iou: 0.5           # and the face must jump (move, resize or vanish) at the cut
 video:
   min_height: 720
   out_height: 720

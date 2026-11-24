@@ -201,7 +201,8 @@ def _cmd_resync(args) -> int:
     if scorer is None:
         raise SystemExit("resync needs SyncNet: set sync.enabled: true and sync.method: syncnet")
     summary = resync(args.out, cfg, lambda: MediaPipeFaces(args.face_model, FPS), scorer, apply=args.apply,
-                     progress=lambda s, total: tqdm(s, desc="clips", total=total), workers=args.workers)  # fmt: skip
+                     progress=lambda s, total: tqdm(s, desc="clips", total=total), workers=args.workers,
+                     recheck=tuple(args.recheck))  # fmt: skip
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if args.apply:
         print(f"next: pvdata identify --out {args.out} --quarantine; pvdata split --out {args.out}; "
@@ -322,6 +323,13 @@ def main(argv=None) -> int:
     rs.add_argument("--face-model")
     rs.add_argument(
         "--workers", type=int, default=0, help="clips checked in parallel (default: half the CPU cores, max 8)"
+    )
+    rs.add_argument(
+        "--recheck",
+        nargs="*",
+        default=[],
+        metavar="VERDICT",
+        help="check clips with these saved verdicts again, e.g. --recheck shot_cut",
     )
     rs.set_defaults(fn=_cmd_resync)
 

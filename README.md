@@ -166,7 +166,7 @@ For the paper, also report:
 | `low_asr_confidence` | Whisper unsure of a word | Try `--asr-model` with IndicWhisper (`asr.backend: hf`) for better Hindi |
 | `too_many_phonemes` | Too much speech for 32 CTC steps | Expected for fast speakers |
 | `face_no_face` / `face_multiple_faces` / `face_not_frontal` / `face_face_too_small` / `face_mouth_too_small` | Fails the face rules in ≥ 5% of frames | Pick tighter `start`/`end`, or better videos |
-| `shot_cut` | The clip crosses a camera cut (anchor → B-roll, wide → close-up) | Correct to drop |
+| `shot_cut` | The clip crosses a camera cut where the face also jumps or vanishes (anchor → B-roll, another person); tickers, banners and flashes don't count | Correct to drop |
 | `sync_weak_av_correlation` / `sync_av_offset` | Cheap check: mouth doesn't move with the audio | Usually correct to drop |
 | `sync_low_syncnet_conf` / `sync_syncnet_offset` | SyncNet: the face on screen is not the voice we hear (voice-over, a news anchor talking over footage of someone else, dubbing) | Correct to drop |
 | `source_low_sync_rate` | Fewer than half of this video's clips passed the sync checks: a news package or B-roll montage, so its few "passes" are chance matches | Correct to drop |
@@ -200,5 +200,5 @@ Thresholds are in `configs/default.yaml`; copy it and pass `--config my.yaml` to
 
 - `pvdata/g2p/hindi_g2p.py` is a copy of `Data/hindi_g2p.py` from the main repo. If that file changes there, copy it again so the CTC check stays identical to training.
 - **Active speaker (is the face on screen the voice we hear?)** is checked in three layers: one camera shot per clip, a cheap mouth/loudness correlation, then [SyncNet](https://github.com/joonson/syncnet_python) on the clip plus up to 1 s of the same shot. SyncNet needs `pip install -e .[syncnet]` (torch + python_speech_features) and downloads `syncnet_v2.model` (~52 MB) on first use; a GPU makes it fast. `--no-syncnet` mines with the cheap check only. A video where fewer than half of the clips pass is dropped whole.
-- **Clips mined before SyncNet** can be re-checked in place: `pvdata resync --out dataset/` (dry run, writes `resync/resync.csv`), look at a few clips near the threshold, then `pvdata resync --out dataset/ --apply` (stop `auto` first) and re-run `identify`, `split`, `validate`.
+- **Clips mined before SyncNet** can be re-checked in place: `pvdata resync --out dataset/` (dry run, writes `resync/resync.csv`), look at a few clips near the threshold (changing `sync.min_conf` re-judges the saved scores, no re-scoring; `--recheck shot_cut` re-runs only those clips), then `pvdata resync --out dataset/ --apply` (stop `auto` first) and re-run `identify`, `split`, `validate`.
 - Licence: MIT for this code. The videos you mine keep their own copyright.

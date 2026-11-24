@@ -10,7 +10,7 @@ from pvdata.config import Config
 from pvdata.export import MANIFEST_FIELDS, Manifest
 from pvdata.face import FaceObs
 from pvdata.pipeline import Decision, Pipeline
-from pvdata.shots import change_scores, find_cuts, shot_bounds
+from pvdata.shots import change_scores, face_jump_cuts, find_cuts, shot_bounds
 from pvdata.syncnet import SyncNetResult, crop_faces, fill_boxes, median_filter, offset_confidence
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
@@ -39,6 +39,15 @@ def test_motion_and_flash_are_not_cuts():
     flashed = [np.clip(f.astype(int) + (60 if i == 20 else 0), 0, 255).astype(np.uint8) for i, f in enumerate(frames)]
     assert find_cuts(change_scores(frames)) == []
     assert find_cuts(change_scores(flashed)) == []
+
+
+def test_cut_counts_only_when_the_face_jumps():
+    still = [(100, 100, 300, 300)] * 40
+    assert face_jump_cuts([20], still) == []  # ticker / banner / flash: the speaker did not move
+    moved = still[:20] + [(400, 120, 560, 280)] * 20
+    assert face_jump_cuts([20], moved) == [20]  # cut to someone else / another framing
+    gone = still[:20] + [None] * 20
+    assert face_jump_cuts([20], gone) == [20]  # cut to B-roll without a face
 
 
 def test_shot_bounds_picks_the_shot_around_the_clip():
@@ -209,3 +218,30 @@ def test_resync_moves_failing_clips_and_marks_the_manifest(tmp_path):
     assert len(list((out / "excluded_sync").glob("*/*.mp4"))) == 2
     marked = Manifest(out / "manifest.csv").rows()
     assert {r["reason"] for r in marked if r.get("clip_id")} == {"resync_low_syncnet_conf"}
+
+
+@needs_ffmpeg
+def test_resync_rejudges_saved_scores_and_rechecks_chosen_verdicts(tmp_path):
+    import csv as _csv
+
+    from pvdata.resync import resync
+
+    _run(tmp_path, None)
+    out = tmp_path / "out"
+    strict = Config()
+    strict.sync.min_conf = 4.0
+    assert resync(out, strict, BoxFace, _fake_syncnet(3.5))["fail"] == 2
+    never = _fake_syncnet(0.0)
+    assert resync(out, Config(), BoxFace, never)["pass"] == 2  # min_conf 3: same saved scores now pass
+    assert never.calls == []  # nothing was scored again
+    path = out / "resync" / "resync.csv"
+    rows = list(_csv.DictReader(open(path, encoding="utf-8")))
+    for r in rows:
+        r["verdict"] = "shot_cut"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = _csv.DictWriter(f, rows[0].keys())
+        w.writeheader()
+        w.writerows(rows)
+    again = _fake_syncnet(6.0)
+    assert resync(out, Config(), BoxFace, again, recheck=("shot_cut",))["pass"] == 2
+    assert len(again.calls) == 2

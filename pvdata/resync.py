@@ -25,7 +25,7 @@ from pathlib import Path
 from pvdata import media
 from pvdata.config import Config
 from pvdata.export import MANIFEST_FIELDS, Manifest
-from pvdata.shots import change_scores, find_cuts
+from pvdata.shots import change_scores, face_jump_cuts, find_cuts
 from pvdata.syncnet import FPS
 
 FIELDS = ["clip_id", "speaker", "frames", "cut", "face_cov", "sync_conf", "syncnet_offset", "verdict"]
@@ -35,10 +35,12 @@ SYNC_VERDICTS = {"ok", "low_syncnet_conf", "syncnet_offset"}  # clips that reach
 def check_file(mp4: Path, cfg: Config, detector: Callable, scorer: Callable, tmp: Path) -> dict:
     frames = media.read_frames(mp4, 0.0, None, FPS)
     row = {"frames": len(frames), "cut": 0}
-    if cfg.shot.enabled and find_cuts(change_scores(frames), cfg.shot.min_score, cfg.shot.ratio):
-        return {**row, "cut": 1, "verdict": "shot_cut"}
     obs = [detector(f) for f in frames]
     boxes = [o.box if o.n_faces == 1 else None for o in obs]
+    if cfg.shot.enabled:
+        cuts = find_cuts(change_scores(frames), cfg.shot.min_score, cfg.shot.ratio)
+        if face_jump_cuts(cuts, boxes, cfg.shot.same_face_iou):
+            return {**row, "cut": 1, "verdict": "shot_cut"}
     cov = sum(b is not None for b in boxes) / max(len(boxes), 1)
     row["face_cov"] = round(cov, 3)
     if cov < 0.9:
@@ -55,11 +57,15 @@ def check_file(mp4: Path, cfg: Config, detector: Callable, scorer: Callable, tmp
     if res is None:
         return {**row, "verdict": "too_short"}
     row.update(sync_conf=round(res.conf, 2), syncnet_offset=res.offset)
-    if res.conf < cfg.sync.min_conf:
-        return {**row, "verdict": "low_syncnet_conf"}
-    if abs(res.offset) > cfg.sync.max_syncnet_offset:
-        return {**row, "verdict": "syncnet_offset"}
-    return {**row, "verdict": "ok"}
+    return {**row, "verdict": sync_verdict(res.conf, res.offset, cfg)}
+
+
+def sync_verdict(conf: float, offset: int, cfg: Config) -> str:
+    if conf < cfg.sync.min_conf:
+        return "low_syncnet_conf"
+    if abs(offset) > cfg.sync.max_syncnet_offset:
+        return "syncnet_offset"
+    return "ok"
 
 
 def source_rule(rows: list[dict], cfg: Config) -> set[str]:
@@ -78,9 +84,12 @@ def source_rule(rows: list[dict], cfg: Config) -> set[str]:
 
 
 def resync(out: str | Path, cfg: Config, face_factory: Callable, scorer: Callable, apply: bool = False,
-           progress: Callable | None = None, workers: int = 0) -> dict:  # fmt: skip
+           progress: Callable | None = None, workers: int = 0, recheck: tuple[str, ...] = ()) -> dict:  # fmt: skip
     """``workers`` clips are checked at once (default: half the CPU cores, at most 8). Each worker keeps one face
-    detector for all its clips (loading MediaPipe per clip cost ~1 s); SyncNet runs on the GPU one batch at a time."""
+    detector for all its clips (loading MediaPipe per clip cost ~1 s); SyncNet runs on the GPU one batch at a time.
+
+    Saved SyncNet scores are re-judged with the current thresholds every run, so changing ``sync.min_conf`` needs
+    no re-scoring. ``recheck`` names verdicts (e.g. ``shot_cut``) whose clips are checked again from scratch."""
     out = Path(out)
     clips = sorted((out / "raw_videos").glob("*/*.mp4"))
     csv_path = out / "resync" / "resync.csv"
@@ -92,6 +101,11 @@ def resync(out: str | Path, cfg: Config, face_factory: Callable, scorer: Callabl
     else:
         with open(csv_path, "w", encoding="utf-8", newline="") as f:
             csv.DictWriter(f, FIELDS).writeheader()
+    for cid in [cid for cid, r in rows.items() if r["verdict"] in recheck]:
+        del rows[cid]
+    for r in rows.values():
+        if r["verdict"] in SYNC_VERDICTS and r.get("sync_conf") not in (None, ""):
+            r["verdict"] = sync_verdict(float(r["sync_conf"]), int(float(r["syncnet_offset"] or 0)), cfg)
     todo = [c for c in clips if c.stem not in rows]
     workers = workers if workers > 0 else max(1, min(8, (os.cpu_count() or 2) // 2))
     local = threading.local()

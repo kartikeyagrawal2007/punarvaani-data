@@ -50,7 +50,7 @@ class SyncConfig:
     method: str = "syncnet"  # syncnet | corr (corr = only the cheap check, e.g. without a GPU)
     syncnet_weights: str = ""  # empty = ~/.cache/pvdata/syncnet_v2.model, downloaded on first use
     device: str = "auto"
-    min_conf: float = 4.0  # SyncNet confidence; talking heads ~5-10, voice-over / B-roll / dubbing ~0-2
+    min_conf: float = 3.0  # SyncNet confidence; talking heads ~5-10, voice-over / B-roll / dubbing ~0-2
     max_syncnet_offset: int = 4  # frames at 25 fps; voice-over has its "best" shift anywhere in +-15
     context_s: float = 1.0  # score clip +- this much of the same shot (longer windows give steadier scores)
     # 3) per video: a news package with B-roll fails most of its clips; drop the few that slip through
@@ -65,6 +65,7 @@ class ShotConfig:
     enabled: bool = True
     min_score: float = 15.0  # mean HSV change between frames (0-255 scale) that can be a cut ...
     ratio: float = 3.0  # ... and at least this many times the change in the neighbouring frames
+    same_face_iou: float = 0.5  # ... and the face box moves/resizes (overlap below this) or disappears there
 
 
 @dataclass

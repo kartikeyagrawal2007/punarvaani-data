@@ -44,6 +44,26 @@ def find_cuts(scores: np.ndarray, min_score: float = 15.0, ratio: float = 3.0, w
     return cuts
 
 
+def box_iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def face_jump_cuts(cuts: list[int], boxes: list, min_iou: float = 0.5) -> list[int]:
+    """Keep only cuts where the face changes too: it moves or resizes (IoU of the boxes either side < min_iou),
+    or is missing on one side. A news ticker, banner, flash or fast gesture changes the picture while the
+    speaker stays where they are; a cut to B-roll or another person always moves or removes the face."""
+    out = []
+    for i in cuts:
+        a, b = (boxes[i - 1] if 0 < i <= len(boxes) else None), (boxes[i] if i < len(boxes) else None)
+        if a is None or b is None or box_iou(a, b) < min_iou:
+            out.append(i)
+    return out
+
+
 def shot_bounds(cuts: list[int], n: int, lo: int, hi: int) -> tuple[int, int]:
     """[start, end) of the shot that contains frames lo..hi-1 (assumes no cut inside that range)."""
     start = max([c for c in cuts if c <= lo], default=0)

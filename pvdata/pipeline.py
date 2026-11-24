@@ -33,7 +33,7 @@ from pvdata.ctc import ctc_steps_for, fits_ctc
 from pvdata.export import Manifest, build_report, clip_paths, is_youtube, next_index, write_json, write_transcript
 from pvdata.face import FaceObs, check_clip, scan_frames
 from pvdata.segment import Candidate, segment_words
-from pvdata.shots import change_scores, find_cuts, shot_bounds
+from pvdata.shots import change_scores, face_jump_cuts, find_cuts, shot_bounds
 from pvdata.sources import Source, speaker_ids
 from pvdata.sync import loudness_envelope, sync_score
 from pvdata.syncnet import FPS as SYNCNET_FPS
@@ -148,8 +148,6 @@ class Pipeline:
         if not ok:
             return Decision("rejected", "too_many_phonemes", norm.text, info)
         frames = media.read_frames(video, offset + cand.start, offset + cand.end, c.clip.fps, c.video.out_height)
-        if c.shot.enabled and find_cuts(change_scores(frames), c.shot.min_score, c.shot.ratio):
-            return Decision("rejected", "shot_cut", norm.text, info)
         detector = self.face_factory()
         try:
             obs = scan_frames(detector, frames, c.face)
@@ -162,6 +160,11 @@ class Pipeline:
         )
         if not face.ok:
             return Decision("rejected", f"face_{face.reason}", norm.text, info)
+        if c.shot.enabled:
+            cuts = find_cuts(change_scores(frames), c.shot.min_score, c.shot.ratio)
+            boxes = [o.box if o.n_faces == 1 else None for o in obs]
+            if face_jump_cuts(cuts, boxes, c.shot.same_face_iou):
+                return Decision("rejected", "shot_cut", norm.text, info)
         if c.sync.enabled:
             sr = media.SAMPLE_RATE
             seg = audio[int(cand.start * sr) : int(cand.end * sr)]
