@@ -20,6 +20,7 @@ import json
 import logging
 import re
 import time
+import zlib
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -38,6 +39,26 @@ def read_seeds(path: str | Path) -> list[str]:
     with open(path, encoding="utf-8", newline="") as f:
         rows = csv.DictReader(line for line in f if not line.lstrip().startswith("#"))
         return [r["query"].strip() for r in rows if (r.get("query") or "").strip()]
+
+
+def parse_shard(text: str | None) -> tuple[int, int] | None:
+    """'2/4' -> (2, 4): this PC is number 2 of 4. None or '' -> no sharding."""
+    if not text:
+        return None
+    k, _, n = text.partition("/")
+    k, n = int(k), int(n)
+    if not 1 <= k <= n:
+        raise ValueError(f"--shard must look like 2/4 (this PC's number / number of PCs), got {text!r}")
+    return k, n
+
+
+def in_shard(channel_id: str, video_id: str, shard: tuple[int, int] | None) -> bool:
+    """Each PC owns a fixed share of channels (a checksum of the channel id), so PCs mining in parallel
+    never pick the same channel or video, with no connection between them."""
+    if shard is None:
+        return True
+    k, n = shard
+    return zlib.crc32((channel_id or video_id).encode("utf-8")) % n == k - 1
 
 
 def slug(text: str, n: int = 24) -> str:
@@ -75,8 +96,10 @@ class State:
 class AutoPilot:
     def __init__(self, cfg: Config, out: str | Path, seeds: list[str], pipeline, screener,
                  search: Callable[[str, int], list[Hit]], channel_list: Callable[[str, int], list[Hit]],
-                 make_source: Callable[[dict], Source] | None = None):  # fmt: skip
+                 make_source: Callable[[dict], Source] | None = None,
+                 shard: tuple[int, int] | None = None):  # fmt: skip
         self.cfg, self.out, self.seeds = cfg, Path(out), seeds
+        self.shard = shard
         self.pipe, self.screener, self.search, self.channel_list = pipeline, screener, search, channel_list
         self.make_source = make_source or (lambda v: Source(f"https://www.youtube.com/watch?v={v['id']}",
                                                             f"{slug(v.get('channel', ''))}_{v['id']}"))  # fmt: skip
@@ -87,6 +110,10 @@ class AutoPilot:
         for v in self.state.videos.values():  # a crash mid-screen or mid-mine: just try that video again
             if v["status"] in ("screening", "mining"):
                 v["status"] = "new" if v["status"] == "screening" else "ok"
+        if shard is not None:  # forget queued videos of channels another PC now owns
+            for vid in [vid for vid, v in self.state.videos.items() if v["status"] in ("new", "ok")
+                        and not in_shard(v.get("channel_id", ""), vid, shard)]:  # fmt: skip
+                del self.state.videos[vid]
 
     # ------------------------------------------------------------- discover
     def hours(self) -> float:
@@ -114,7 +141,7 @@ class AutoPilot:
     def add_hits(self, hits: list[Hit]) -> int:
         a, n = self.cfg.auto, 0
         for h in hits:
-            if h.video_id in self.state.videos:
+            if h.video_id in self.state.videos or not in_shard(h.channel_id, h.video_id, self.shard):
                 continue
             reason = ""
             if h.duration and not a.min_minutes * 60 <= h.duration <= a.max_minutes * 60:  # 0 = unknown, look up later
@@ -132,7 +159,8 @@ class AutoPilot:
         """One round: expand good channels, then search each seed query a bit deeper. Returns new videos."""
         a, found = self.cfg.auto, 0
         for cid, c in self.state.channels.items():
-            if c["expanded"] or not cid or cid == "unknown" or c["mined"] < a.expand_after_videos:
+            mine = cid and cid != "unknown" and in_shard(cid, "", self.shard)
+            if c["expanded"] or not mine or c["mined"] < a.expand_after_videos:
                 continue
             if c["accepted_s"] / max(c["mined"], 1) >= a.expand_min_minutes_per_video * 60 and not self.channel_full(
                 cid

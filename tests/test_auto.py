@@ -241,3 +241,36 @@ def test_split_holds_about_ten_percent_of_clips_with_many_people():
             frac = sum(clips[x] for x in s[split]) / total
             assert 0.08 <= frac <= 0.16, (seed, split, frac)
         assert sum(clips[x] for x in s["train"]) / total >= 0.7
+
+
+# ------------------------------------------------------------------ several PCs
+def test_shards_split_channels_between_pcs_without_overlap(tmp_path):
+    from pvdata.auto import in_shard, parse_shard
+
+    assert parse_shard("2/4") == (2, 4) and parse_shard(None) is None
+    with pytest.raises(ValueError):
+        parse_shard("5/4")
+    ids = [f"UC{i:05d}" for i in range(400)]
+    owners = [[k for k in range(1, 5) if in_shard(c, "", (k, 4))] for c in ids]
+    assert all(len(o) == 1 for o in owners)  # every channel belongs to exactly one PC
+    assert min(sum(o == [k] for o in owners) for k in range(1, 5)) > 60  # and the shares are roughly even
+
+    hits = [Hit(f"v{i}", 600, "talk", f"chan{i}", c) for i, c in enumerate(ids[:40])]
+    pilots = [AutoPilot(Config(), tmp_path / f"pc{k}", [], None, None, None, None, shard=(k, 2)) for k in (1, 2)]
+    got = [set() for _ in pilots]
+    for p, g in zip(pilots, got):
+        p.add_hits(hits)
+        g |= set(p.state.videos)
+    assert not got[0] & got[1] and len(got[0] | got[1]) == 40
+
+    # A PC that switches to sharding forgets the queued videos of channels another PC now owns.
+    out = tmp_path / "main"
+    whole = AutoPilot(Config(), out, [], None, None, None, None)
+    whole.add_hits(hits)
+    for v in list(whole.state.videos.values())[:5]:
+        v["status"] = "mined"
+    whole.state.save()
+    sharded = AutoPilot(Config(), out, [], None, None, None, None, shard=(1, 2))
+    kept = sharded.state.videos
+    assert all(v["status"] == "mined" or in_shard(v["channel_id"], vid, (1, 2)) for vid, v in kept.items())
+    assert sum(v["status"] == "mined" for v in kept.values()) == 5  # finished work is never forgotten

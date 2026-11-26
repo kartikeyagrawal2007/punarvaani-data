@@ -123,6 +123,17 @@ caps per channel (25 videos, 3 h) keep any one person from dominating; best-scor
 - Stop with Ctrl+C at any time; rerunning continues. Everything decided is in `dataset/auto/state.json` (status and reason for every video seen).
 - Add seed queries any time (especially for women speakers and regional accents). Each round searches deeper (top 50 → 100 → 200 → 400).
 - Disk: clips only (the full videos are deleted). Check `raw_videos` size ÷ number of clips × the clips you expect.
+- **Several PCs at once:** give every PC the same seeds and a `--shard`: this PC's number / number of PCs. Each PC then owns a fixed share of YouTube channels (a checksum of the channel id), so two PCs never mine the same channel or video, and they need no connection to each other. The main PC keeps its `dataset/` and adds `--shard 1/4`; the others mine into their own folder:
+  ```bash
+  pvdata auto --seeds sources/seeds.csv --out dataset/ --shard 1/4          # main PC
+  pvdata auto --seeds sources/seeds.csv --out dataset_pc2/ --shard 2/4      # PC 2 (and 3/4, 4/4 on the others)
+  ```
+  Every few days copy each PC's folder to the main PC (USB drive, AnyDesk or a shared folder), stop `auto` there, and merge. Each merged video gets a new speaker number, a video the main dataset already has is skipped (merging the same folder twice adds nothing), and the other PC's autopilot decisions come along so the main PC never mines those videos. Then identify (one person mined on two PCs becomes one person) and split:
+  ```bash
+  pvdata merge --from D:/dataset_pc2 --into dataset/
+  pvdata identify --out dataset/ --quarantine && pvdata split --out dataset/
+  ```
+  A PC keeps mining into its own folder after a merge; the next merge only adds what is new.
 
 ## Choosing videos (this decides the quality more than any setting)
 

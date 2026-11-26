@@ -9,6 +9,7 @@ pvdata resync   --out dataset/ [--apply]                             # re-check 
 pvdata validate dataset/raw_videos                                   # check the TEAM_GUIDE rules
 pvdata split    --out dataset/                                       # speaker-disjoint train/val/test
 pvdata report   --out dataset/                                       # counts + rejection reasons
+pvdata merge    --from D:/dataset_pc2 --into dataset/                # add clips mined on another PC
 """
 
 from __future__ import annotations
@@ -71,7 +72,7 @@ def _models(args, cfg):
 
 
 def _cmd_auto(args) -> int:
-    from pvdata.auto import AutoPilot, read_seeds
+    from pvdata.auto import AutoPilot, parse_shard, read_seeds
     from pvdata.face import MediaPipeFaces
     from pvdata.find import channel_videos, search_raw
     from pvdata.pipeline import Pipeline
@@ -86,7 +87,8 @@ def _cmd_auto(args) -> int:
                     cookies=args.cookies, workers=args.workers, keep_downloads=cfg.auto.keep_downloads,
                     syncnet=_syncnet(cfg, args))  # fmt: skip
     screener = Screener(cfg, work, transcriber, lambda fps: MediaPipeFaces(args.face_model, fps), args.cookies)
-    pilot = AutoPilot(cfg, args.out, read_seeds(args.seeds), pipe, screener, search_raw, channel_videos)
+    pilot = AutoPilot(cfg, args.out, read_seeds(args.seeds), pipe, screener, search_raw, channel_videos,
+                      shard=parse_shard(args.shard))  # fmt: skip
     summary = pilot.run(args.target_hours, args.max_videos)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -222,6 +224,16 @@ def _cmd_report(args) -> int:
     return 0
 
 
+def _cmd_merge(args) -> int:
+    from pvdata.merge import merge
+
+    stats = merge(args.src, args.into, force=args.force)
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    print(f"next: pvdata identify --out {args.into} --quarantine; pvdata split --out {args.into}; "
+          f"then restart pvdata auto on {args.into}")  # fmt: skip
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="pvdata", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -259,6 +271,11 @@ def main(argv=None) -> int:
     au.add_argument("--face-model")
     au.add_argument("--cookies")
     au.add_argument("--workers", type=int, default=0)
+    au.add_argument(
+        "--shard",
+        help="mining on several PCs: this PC's number / number of PCs, e.g. 2/4. Each PC "
+        "then owns its own share of channels, so no two PCs mine the same video",
+    )
     au.add_argument("--no-syncnet", action="store_true", help="cheap correlation sync check only (no GPU model)")
     au.set_defaults(fn=_cmd_auto)
 
@@ -332,6 +349,12 @@ def main(argv=None) -> int:
         help="check clips with these saved verdicts again, e.g. --recheck shot_cut",
     )
     rs.set_defaults(fn=_cmd_resync)
+
+    mg = sub.add_parser("merge", help="add a dataset mined on another PC (new speaker numbers, no duplicate videos)")
+    mg.add_argument("--from", dest="src", required=True, help="the other PC's dataset folder (copied here)")
+    mg.add_argument("--into", required=True, help="the main dataset folder (stop pvdata auto on it first)")
+    mg.add_argument("--force", action="store_true", help="merge even if the main manifest changed in the last 2 min")
+    mg.set_defaults(fn=_cmd_merge)
 
     p = sub.add_parser("report", help="recompute report.json from manifest.csv")
     p.add_argument("--out", required=True)
